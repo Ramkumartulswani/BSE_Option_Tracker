@@ -22,7 +22,7 @@ st.set_page_config(
 # -------------------------
 # Google Ads Configuration
 # -------------------------
-ADSENSE_PUBLISHER_ID = "ca-pub-XXXXXXXXXXXXXXXX"  # REPLACE WITH YOUR PUBLISHER ID
+ADSENSE_PUBLISHER_ID = "ca-pub-5140463358652561"  # REPLACE WITH YOUR PUBLISHER ID
 ENABLE_ADS = False  # Set to True when you have AdSense approval
 
 # Setup logging
