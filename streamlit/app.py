@@ -8,7 +8,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Tuple, Dict, Optional, List
 import logging
-import streamlit.components.v1 as components
 
 # -------------------------
 # Configuration
@@ -19,12 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# -------------------------
-# Google Ads Configuration
-# -------------------------
-ADSENSE_PUBLISHER_ID = "ca-pub-5140463358652561"  # REPLACE WITH YOUR PUBLISHER ID
-ENABLE_ADS = False  # Set to True when you have AdSense approval
-
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,103 +27,6 @@ DEFAULT_SCRIP = "1"
 API_BASE_URL = "https://api.bseindia.com/BseIndiaAPI/api/DerivOptionChain_IV/w"
 CACHE_TTL = 30  # seconds
 NEARBY_RANGE = 500  # points
-
-# -------------------------
-# Google Ads Rendering Functions
-# -------------------------
-def render_google_ad(ad_slot: str, ad_format: str = "auto", height: int = 250):
-    """
-    Render Google AdSense ad
-    
-    Args:
-        ad_slot: Your ad slot ID from AdSense dashboard
-        ad_format: Ad format (auto, horizontal, vertical, rectangle)
-        height: Height of ad container in pixels
-    """
-    if not ENABLE_ADS:
-        render_ad_placeholder()
-        return
-    
-    ad_html = f"""
-    <div style="text-align: center; padding: 10px; background-color: #f0f2f6; border-radius: 5px;">
-        <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client={ADSENSE_PUBLISHER_ID}"
-             crossorigin="anonymous"></script>
-        <ins class="adsbygoogle"
-             style="display:block"
-             data-ad-client="{ADSENSE_PUBLISHER_ID}"
-             data-ad-slot="{ad_slot}"
-             data-ad-format="{ad_format}"
-             data-full-width-responsive="true"></ins>
-        <script>
-             (adsbygoogle = window.adsbygoogle || []).push({{}});
-        </script>
-    </div>
-    """
-    components.html(ad_html, height=height, scrolling=False)
-
-
-def render_ad_placeholder(message: str = "📢 Advertisement Space"):
-    """Render ad placeholder during development"""
-    st.markdown(f"""
-    <div style='padding: 20px; background: linear-gradient(135deg, #667eea22 0%, #764ba244 100%);
-                border: 2px dashed #667eea; border-radius: 10px; text-align: center; 
-                color: #667eea; margin: 10px 0;'>
-        <h4 style='margin: 0;'>{message}</h4>
-        <p style='margin: 5px 0; font-size: 12px;'>Replace ADSENSE_PUBLISHER_ID and set ENABLE_ADS = True</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def render_sidebar_ad(ad_slot: str = "0000000000"):
-    """Render vertical ad for sidebar"""
-    if ENABLE_ADS:
-        render_google_ad(ad_slot, ad_format="vertical", height=600)
-    else:
-        st.markdown("""
-        <div style='padding: 15px; background: #f0f2f6; border-radius: 5px; text-align: center;'>
-            <p style='margin: 0; font-size: 12px; color: #666;'>Ad Space (300x600)</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_privacy_footer():
-    """Render privacy policy and cookie consent (required for AdSense)"""
-    with st.expander("📋 Privacy Policy & Cookie Notice"):
-        st.markdown("""
-        ### Privacy Policy
-        
-        This website uses Google AdSense to display advertisements. Google uses cookies to serve ads 
-        based on your prior visits to this website or other websites.
-        
-        **What are cookies?**
-        Cookies are small text files stored on your device that help us provide a better experience.
-        
-        **How Google uses data:**
-        - Google's use of advertising cookies enables it and its partners to serve ads based on your 
-          visit to this site and/or other sites on the Internet.
-        - You can opt out of personalized advertising by visiting [Ads Settings](https://www.google.com/settings/ads).
-        
-        **Third-party vendors:**
-        - Third-party vendors, including Google, use cookies to serve ads based on your prior visits.
-        - Google's use of the DoubleClick cookie enables it to serve ads based on visits to various sites.
-        
-        **Your choices:**
-        - You can opt out of personalized advertising at [aboutads.info](http://www.aboutads.info/choices/).
-        - You can also opt out of Google's personalized ads at [Google Ads Settings](https://www.google.com/settings/ads).
-        
-        ### Data Usage
-        We use Google Analytics and AdSense to improve our service. Data collected includes:
-        - Page views and navigation patterns
-        - Geographic location (city/country level)
-        - Device and browser information
-        - No personally identifiable information is collected
-        
-        ### Contact
-        For questions about our privacy policy, please contact us through the feedback form.
-        
-        *Last updated: {datetime.now().strftime("%B %d, %Y")}*
-        """)
-
 
 # -------------------------
 # Fetch Available Expiry Dates
@@ -739,13 +635,6 @@ def main():
     st.title("📈 BSE Option Chain Live Dashboard")
     st.markdown("**Real-time Support, Resistance, and Advanced Market Analytics**")
     
-    # ===== TOP BANNER AD =====
-    if ENABLE_ADS or True:  # Show placeholder even if ads disabled
-        with st.container():
-            st.caption("Advertisement")
-            render_google_ad(ad_slot="1234567890", ad_format="horizontal", height=90)
-            st.divider()
-    
     analyzer = OptionAnalyzer()
     chart_gen = ChartGenerator()
     
@@ -756,11 +645,6 @@ def main():
         # Scrip Code
         scrip_cd = st.text_input("Scrip Code", DEFAULT_SCRIP, help="BSE scrip code")
         
-        st.divider()
-        
-        # ===== SIDEBAR AD =====
-        st.caption("📢 Sponsored")
-        render_sidebar_ad(ad_slot="9999999999")
         st.divider()
         
         # ===== HYBRID EXPIRY SELECTION =====
@@ -963,12 +847,6 @@ def main():
     
     st.divider()
     
-    # ===== MIDDLE AD (Between sections) =====
-    with st.container():
-        st.caption("Advertisement")
-        render_google_ad(ad_slot="2222222222", ad_format="horizontal", height=90)
-        st.divider()
-    
     # Support & Resistance
     col1, col2 = st.columns(2)
     
@@ -1023,19 +901,7 @@ def main():
     
     # Footer
     st.divider()
-    
-    # ===== BOTTOM AD =====
-    with st.container():
-        st.caption("Advertisement")
-        render_google_ad(ad_slot="3333333333", ad_format="horizontal", height=90)
-        st.divider()
-    
-    # Privacy Policy & Disclaimer
-    col1, col2 = st.columns(2)
-    with col1:
-        st.caption("⚠️ **Disclaimer:** Educational purposes only. Trading involves risk. Consult a financial advisor before making trading decisions.")
-    with col2:
-        render_privacy_footer()
+    st.caption("⚠️ **Disclaimer:** Educational purposes only. Trading involves risk.")
     
     # Auto Refresh
     if auto_refresh:
