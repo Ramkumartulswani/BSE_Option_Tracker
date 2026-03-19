@@ -9,901 +9,1028 @@ from plotly.subplots import make_subplots
 from typing import Tuple, Dict, Optional, List
 import logging
 
-# -------------------------
+# ─────────────────────────────────────────────
 # Configuration
-# -------------------------
+# ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="📊 BSE Option Chain Dashboard",
+    page_title="📊 BSE Option Chain Pro",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants
-DEFAULT_SCRIP = "1"
-API_BASE_URL = "https://api.bseindia.com/BseIndiaAPI/api/DerivOptionChain_IV/w"
-CACHE_TTL = 30  # seconds
-NEARBY_RANGE = 500  # points
+DEFAULT_SCRIP  = "1"
+API_BASE_URL   = "https://api.bseindia.com/BseIndiaAPI/api/DerivOptionChain_IV/w"
+CACHE_TTL      = 30
+NEARBY_RANGE   = 500
 
-# -------------------------
-# Fetch Available Expiry Dates
-# -------------------------
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+# ─────────────────────────────────────────────
+# Custom CSS
+# ─────────────────────────────────────────────
+st.markdown("""
+<style>
+  .metric-card {
+      padding: 14px 18px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.12);
+      text-align: center;
+  }
+  .metric-card .label { font-size: 12px; opacity: .7; margin-bottom: 4px; }
+  .metric-card .value { font-size: 22px; font-weight: 700; }
+  .signal-box {
+      padding: 14px;
+      border-radius: 8px;
+      margin: 8px 0;
+  }
+  .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      margin: 2px;
+  }
+  .tag-itm   { background:#1a7a4a; color:#aff5c8; }
+  .tag-atm   { background:#7a6a10; color:#fff0a0; }
+  .tag-otm   { background:#1a3a6a; color:#a0cfff; }
+  .tag-high  { background:#6a1a1a; color:#ffaaaa; }
+  .tag-bull  { background:#0f5f2f; color:#90ff90; }
+  .tag-bear  { background:#5f0f0f; color:#ff9090; }
+  .tag-neut  { background:#2e2e2e; color:#cccccc; }
+  .tag-surge { background:#5f3f00; color:#ffd080; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# Expiry Helpers
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=300)
 def fetch_expiry_dates(scrip_cd: str = "1") -> List[str]:
-    """
-    Fetch available expiry dates from BSE API
-    
-    Args:
-        scrip_cd: BSE scrip code
-        
-    Returns:
-        List of expiry dates in 'DD MMM YYYY' format
-    """
     headers = {
         "accept": "application/json, text/plain, */*",
         "origin": "https://www.bseindia.com",
         "referer": "https://www.bseindia.com/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    
     try:
         session = requests.Session()
         session.get("https://www.bseindia.com", headers=headers, timeout=5)
-        
-        # Try multiple possible endpoints for expiry dates
         urls_to_try = [
             f"https://api.bseindia.com/BseIndiaAPI/api/DDlExpiry/w?flag=0&scripcode={scrip_cd}",
             f"https://api.bseindia.com/BseIndiaAPI/api/DefaultData/w?scripcode={scrip_cd}",
             f"https://api.bseindia.com/BseIndiaAPI/api/DerivExpiryDates/w?scripcode={scrip_cd}",
         ]
-        
         expiry_dates = []
-        
         for url in urls_to_try:
             try:
-                response = session.get(url, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    # Try different possible key names for expiry dates
-                    possible_keys = ['Table', 'expiry', 'expiryDate', 'ExpiryDates', 'Expiry', 
-                                    'expDates', 'ExpiryList', 'expirylist', 'expiryDt']
-                    
-                    for key in possible_keys:
-                        if key in data:
-                            if isinstance(data[key], list):
-                                # Extract expiry dates from list
-                                for item in data[key]:
-                                    if isinstance(item, dict):
-                                        # Try different field names
-                                        for date_key in ['expiry', 'Expiry', 'ExpiryDate', 'expiry_date', 
-                                                        'Expiry_Date', 'expiryDt', 'ExpiryDt']:
-                                            if date_key in item and item[date_key]:
-                                                date_str = str(item[date_key]).strip()
-                                                if date_str and date_str not in expiry_dates:
-                                                    expiry_dates.append(date_str)
-                                    elif isinstance(item, str) and item.strip():
-                                        if item.strip() not in expiry_dates:
-                                            expiry_dates.append(item.strip())
-                            elif isinstance(data[key], str) and data[key].strip():
-                                if data[key].strip() not in expiry_dates:
-                                    expiry_dates.append(data[key].strip())
-                    
+                r = session.get(url, headers=headers, timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    for key in ['Table','expiry','expiryDate','ExpiryDates','Expiry','expDates','ExpiryList','expirylist','expiryDt']:
+                        if key in data and isinstance(data[key], list):
+                            for item in data[key]:
+                                if isinstance(item, dict):
+                                    for dk in ['expiry','Expiry','ExpiryDate','expiry_date','Expiry_Date','expiryDt','ExpiryDt']:
+                                        if dk in item and item[dk]:
+                                            d = str(item[dk]).strip()
+                                            if d and d not in expiry_dates:
+                                                expiry_dates.append(d)
+                                elif isinstance(item, str) and item.strip() not in expiry_dates:
+                                    expiry_dates.append(item.strip())
                     if expiry_dates:
-                        logger.info(f"Found {len(expiry_dates)} expiry dates from {url}")
                         break
-                        
-            except Exception as e:
-                logger.debug(f"Failed to fetch from {url}: {str(e)}")
+            except Exception:
                 continue
-        
-        # If API fetch fails, generate approximate monthly expiries as fallback
         if not expiry_dates:
-            logger.warning("Could not fetch expiry dates from API, generating defaults")
             expiry_dates = generate_default_expiries()
-        
-        # Clean and deduplicate
-        expiry_dates = list(set([exp.strip() for exp in expiry_dates if exp and exp.strip()]))
-        
-        # Sort dates
+        expiry_dates = list(set([e.strip() for e in expiry_dates if e and e.strip()]))
         try:
             expiry_dates.sort(key=lambda x: datetime.strptime(x, "%d %b %Y"))
-        except:
-            try:
-                # Try alternative format
-                expiry_dates.sort(key=lambda x: datetime.strptime(x, "%d-%b-%Y"))
-            except:
-                pass  # Keep original order if parsing fails
-        
-        logger.info(f"Returning {len(expiry_dates)} expiry dates")
+        except Exception:
+            pass
         return expiry_dates
-        
-    except Exception as e:
-        logger.error(f"Error fetching expiry dates: {str(e)}")
+    except Exception:
         return generate_default_expiries()
 
 
 def generate_default_expiries() -> List[str]:
-    """Generate next 6 monthly expiries (last Thursday of each month)"""
     current_date = datetime.now()
     expiry_dates = []
-    
-    for i in range(12):  # Generate 12 months worth
-        # Calculate target month
+    for i in range(12):
         month = current_date.month + i
-        year = current_date.year + (month - 1) // 12
+        year  = current_date.year + (month - 1) // 12
         month = ((month - 1) % 12) + 1
-        
-        # Last day of month
-        if month == 12:
-            last_day = datetime(year + 1, 1, 1) - timedelta(days=1)
-        else:
-            last_day = datetime(year, month + 1, 1) - timedelta(days=1)
-        
-        # Find last Thursday (weekday 3)
+        last_day = (datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)) - timedelta(days=1)
         while last_day.weekday() != 3:
             last_day -= timedelta(days=1)
-        
         expiry_dates.append(last_day.strftime("%d %b %Y"))
-    
     return expiry_dates
 
 
-# -------------------------
-# Utility Functions
-# -------------------------
-def safe_float_conversion(value, default=0.0) -> float:
-    """Safely convert value to float with fallback"""
+# ─────────────────────────────────────────────
+# Utility
+# ─────────────────────────────────────────────
+def safe_float(value, default=0.0) -> float:
     try:
         return float(str(value).replace(",", "").strip())
-    except (ValueError, TypeError, AttributeError):
+    except Exception:
         return default
 
 
-def format_currency(value: float) -> str:
-    """Format value as Indian currency"""
+def fmt(value: float) -> str:
     return f"₹{value:,.2f}"
 
 
+def fmt_cr(value: float) -> str:
+    """Format large numbers in Crores"""
+    if value >= 1e7:
+        return f"₹{value/1e7:.2f} Cr"
+    elif value >= 1e5:
+        return f"₹{value/1e5:.2f} L"
+    return f"₹{value:,.0f}"
+
+
 def validate_expiry_format(expiry: str) -> bool:
-    """Validate expiry date format"""
-    try:
-        datetime.strptime(expiry, "%d %b %Y")
-        return True
-    except:
+    for fmt_str in ("%d %b %Y", "%d-%b-%Y"):
         try:
-            datetime.strptime(expiry, "%d-%b-%Y")
+            datetime.strptime(expiry, fmt_str)
             return True
-        except:
-            return False
+        except Exception:
+            pass
+    return False
 
 
-# -------------------------
+# ─────────────────────────────────────────────
 # Data Fetching
-# -------------------------
+# ─────────────────────────────────────────────
 @st.cache_data(ttl=CACHE_TTL)
-def fetch_bse_option_chain(expiry: str, scrip_cd: str, strprice: str = "0") -> Tuple[Optional[pd.DataFrame], Optional[float], Optional[str], Optional[float], Optional[float]]:
-    """
-    Fetch option chain data from BSE API with robust error handling
-    
-    Returns:
-        tuple: (dataframe, spot_price, error_message, day_high, day_low)
-    """
+def fetch_bse_option_chain(expiry: str, scrip_cd: str, strprice: str = "0"):
     url = f"{API_BASE_URL}?Expiry={expiry.replace(' ', '+')}&scrip_cd={scrip_cd}&strprice={strprice}"
-    
     headers = {
         "accept": "application/json, text/plain, */*",
         "origin": "https://www.bseindia.com",
         "referer": "https://www.bseindia.com/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    
     try:
         session = requests.Session()
         session.get("https://www.bseindia.com", headers=headers, timeout=5)
-        response = session.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            logger.error(f"HTTP Error: {response.status_code}")
-            return None, None, f"❌ HTTP Error: {response.status_code}", None, None
-        
-        data = response.json()
+        r = session.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return None, None, f"❌ HTTP {r.status_code}", None, None
+        data = r.json()
         table = data.get("Table", [])
-        
         if not table:
-            return None, None, "⚠️ No data found for given expiry/instrument.", None, None
-        
-        df = _process_option_chain_df(table)
-        spot_price = _extract_spot_price(data, table, df)
-        day_high = _extract_market_value(data, ["High", "high", "DayHigh", "dayHigh"])
-        day_low = _extract_market_value(data, ["Low", "low", "DayLow", "dayLow"])
-        
-        logger.info(f"Successfully fetched data: {len(df)} strikes")
+            return None, None, "⚠️ No data for given expiry.", None, None
+        df         = _process_df(table)
+        spot_price = _extract_spot(data, table, df)
+        day_high   = _extract_val(data, ["High","high","DayHigh","dayHigh"])
+        day_low    = _extract_val(data, ["Low","low","DayLow","dayLow"])
         return df, spot_price, None, day_high, day_low
-        
     except requests.exceptions.Timeout:
-        return None, None, "⏱️ Request timeout. Please try again.", None, None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Network error: {str(e)}")
-        return None, None, f"🔌 Network error: {str(e)}", None, None
+        return None, None, "⏱️ Timeout.", None, None
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return None, None, f"⚠️ Error: {str(e)}", None, None
+        return None, None, f"⚠️ {e}", None, None
 
 
-def _process_option_chain_df(table: list) -> pd.DataFrame:
-    """Process and clean option chain dataframe"""
+def _process_df(table):
     df = pd.DataFrame(table)
-    
     df = df.rename(columns={
         "Strike_Price1": "Strike Price",
-        "Open_Interest": "PE OI",
-        "C_Open_Interest": "CE OI",
-        "Vol_Traded": "PE Volume",
-        "C_Vol_Traded": "CE Volume",
-        "Last_Trd_Price": "PE LTP",
-        "C_Last_Trd_Price": "CE LTP",
-        "IV": "PE IV",
-        "C_IV": "CE IV",
+        "Open_Interest": "PE OI",    "C_Open_Interest": "CE OI",
+        "Vol_Traded":    "PE Volume", "C_Vol_Traded":    "CE Volume",
+        "Last_Trd_Price":"PE LTP",   "C_Last_Trd_Price":"CE LTP",
+        "IV":            "PE IV",    "C_IV":             "CE IV",
     })
-    
-    cols = ["Strike Price", "CE OI", "CE LTP", "CE Volume", "CE IV",
-            "PE OI", "PE LTP", "PE Volume", "PE IV"]
+    cols = ["Strike Price","CE OI","CE LTP","CE Volume","CE IV",
+            "PE OI","PE LTP","PE Volume","PE IV"]
     df = df[cols]
-    
     for col in cols:
-        df[col] = df[col].astype(str).str.replace(",", "").replace(["", " ", "None"], "0")
+        df[col] = df[col].astype(str).str.replace(",","").replace(["","None"," "],"0")
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).round(2)
-    
     df = df[(df["CE OI"] > 0) | (df["PE OI"] > 0)]
-    df = df.sort_values(by="Strike Price").reset_index(drop=True)
-    
-    return df
+    return df.sort_values("Strike Price").reset_index(drop=True)
 
 
-def _extract_spot_price(data: dict, table: list, df: pd.DataFrame) -> float:
-    """Extract spot price from API response"""
-    spot_keys = ["UlaValue", "UnderlyingValue", "underlyingValue", "Underlying_Value", 
-                 "spotPrice", "SpotPrice", "IndexValue", "indexValue"]
-    
-    for key in spot_keys:
-        if key in data and data[key]:
-            spot = safe_float_conversion(data[key])
-            if spot > 0:
-                return spot
-    
+def _extract_spot(data, table, df):
+    keys = ["UlaValue","UnderlyingValue","underlyingValue","Underlying_Value","spotPrice","SpotPrice","IndexValue","indexValue"]
+    for k in keys:
+        if k in data and data[k]:
+            v = safe_float(data[k])
+            if v > 0: return v
     if table:
-        for key in spot_keys:
-            if key in table[0]:
-                spot = safe_float_conversion(table[0][key])
-                if spot > 0:
-                    return spot
-    
-    return df["Strike Price"].median()
+        for k in keys:
+            if k in table[0]:
+                v = safe_float(table[0][k])
+                if v > 0: return v
+    return float(df["Strike Price"].median())
 
 
-def _extract_market_value(data: dict, keys: list) -> Optional[float]:
-    """Extract market value (high/low) from API response"""
-    for key in keys:
-        if key in data and data[key]:
-            value = safe_float_conversion(data[key])
-            if value > 0:
-                return value
+def _extract_val(data, keys):
+    for k in keys:
+        if k in data and data[k]:
+            v = safe_float(data[k])
+            if v > 0: return v
     return None
 
 
-# -------------------------
-# Analysis Functions (Same as before - keeping for brevity)
-# -------------------------
+# ─────────────────────────────────────────────
+# NEW: Total OI & Premium Summary
+# ─────────────────────────────────────────────
+def compute_totals(df: pd.DataFrame, spot_price: float) -> Dict:
+    total_ce_oi      = df["CE OI"].sum()
+    total_pe_oi      = df["PE OI"].sum()
+    total_oi         = total_ce_oi + total_pe_oi
+    total_ce_vol     = df["CE Volume"].sum()
+    total_pe_vol     = df["PE Volume"].sum()
+    total_vol        = total_ce_vol + total_pe_vol
+
+    # Total Premium (LTP × OI as proxy for notional premium)
+    df["CE Premium"] = df["CE LTP"] * df["CE OI"]
+    df["PE Premium"] = df["PE LTP"] * df["PE OI"]
+    total_ce_premium = df["CE Premium"].sum()
+    total_pe_premium = df["PE Premium"].sum()
+    total_premium    = total_ce_premium + total_pe_premium
+
+    # ATM Straddle price
+    atm_idx    = (df["Strike Price"] - spot_price).abs().idxmin()
+    atm_strike = df.loc[atm_idx, "Strike Price"]
+    atm_ce_ltp = df.loc[atm_idx, "CE LTP"]
+    atm_pe_ltp = df.loc[atm_idx, "PE LTP"]
+    straddle_price = atm_ce_ltp + atm_pe_ltp
+
+    # Upper/lower breakeven
+    breakeven_up   = atm_strike + straddle_price
+    breakeven_down = atm_strike - straddle_price
+
+    # OI skew %
+    oi_skew = ((total_pe_oi - total_ce_oi) / total_oi * 100) if total_oi > 0 else 0
+
+    # Premium skew
+    premium_skew = ((total_pe_premium - total_ce_premium) / total_premium * 100) if total_premium > 0 else 0
+
+    pcr_oi  = round(total_pe_oi / total_ce_oi, 3)   if total_ce_oi  > 0 else 0
+    pcr_vol = round(total_pe_vol / total_ce_vol, 3)  if total_ce_vol > 0 else 0
+
+    # Max OI strikes
+    max_ce_strike = df.loc[df["CE OI"].idxmax(), "Strike Price"] if total_ce_oi > 0 else None
+    max_pe_strike = df.loc[df["PE OI"].idxmax(), "Strike Price"] if total_pe_oi > 0 else None
+
+    return {
+        "total_ce_oi": total_ce_oi, "total_pe_oi": total_pe_oi, "total_oi": total_oi,
+        "total_ce_vol": total_ce_vol, "total_pe_vol": total_pe_vol, "total_vol": total_vol,
+        "total_ce_premium": total_ce_premium, "total_pe_premium": total_pe_premium, "total_premium": total_premium,
+        "atm_strike": atm_strike, "atm_ce_ltp": atm_ce_ltp, "atm_pe_ltp": atm_pe_ltp,
+        "straddle_price": straddle_price, "breakeven_up": breakeven_up, "breakeven_down": breakeven_down,
+        "oi_skew": oi_skew, "premium_skew": premium_skew,
+        "pcr_oi": pcr_oi, "pcr_vol": pcr_vol,
+        "max_ce_strike": max_ce_strike, "max_pe_strike": max_pe_strike,
+    }
+
+
+# ─────────────────────────────────────────────
+# NEW: Full Chain Enrichment (decision signals)
+# ─────────────────────────────────────────────
+def enrich_chain(df: pd.DataFrame, spot_price: float) -> pd.DataFrame:
+    out = df.copy()
+
+    # — Moneyness tag
+    atm_strike = (out["Strike Price"] - spot_price).abs().idxmin()
+    atm_val    = out.loc[atm_strike, "Strike Price"]
+
+    def moneyness(s):
+        if abs(s - atm_val) <= (atm_val * 0.003):  # within 0.3%
+            return "ATM"
+        elif s < spot_price:
+            return "ITM-CE / OTM-PE"
+        else:
+            return "OTM-CE / ITM-PE"
+    out["Moneyness"] = out["Strike Price"].apply(moneyness)
+
+    # — OI Concentration (top 20% by each side)
+    ce_q80 = out["CE OI"].quantile(0.80)
+    pe_q80 = out["PE OI"].quantile(0.80)
+    out["CE Concentration"] = out["CE OI"].apply(lambda x: "🔴 HIGH" if x >= ce_q80 else "")
+    out["PE Concentration"] = out["PE OI"].apply(lambda x: "🟢 HIGH" if x >= pe_q80 else "")
+
+    # — Volume surge (vol > 2× median)
+    ce_med_vol = out["CE Volume"].median()
+    pe_med_vol = out["PE Volume"].median()
+    out["CE Vol Surge"] = out["CE Volume"].apply(lambda x: "⚡ SURGE" if x > 2 * ce_med_vol and ce_med_vol > 0 else "")
+    out["PE Vol Surge"] = out["PE Volume"].apply(lambda x: "⚡ SURGE" if x > 2 * pe_med_vol and pe_med_vol > 0 else "")
+
+    # — OI Ratio per strike (PE OI / CE OI)
+    out["Strike PCR"] = out.apply(
+        lambda r: round(r["PE OI"] / r["CE OI"], 2) if r["CE OI"] > 0 else np.nan, axis=1
+    )
+
+    # — Straddle price per strike
+    out["Straddle"] = (out["CE LTP"] + out["PE LTP"]).round(2)
+
+    # — Notional Premium (₹)
+    out["CE Notional"] = (out["CE LTP"] * out["CE OI"]).round(0)
+    out["PE Notional"] = (out["PE LTP"] * out["PE OI"]).round(0)
+
+    # — Per-strike bias signal
+    def strike_bias(row):
+        pcr = row["Strike PCR"]
+        if pd.isna(pcr):
+            return "—"
+        if pcr >= 1.5:
+            return "🟢 Strong Support"
+        elif pcr >= 1.1:
+            return "🟡 Mild Support"
+        elif pcr <= 0.6:
+            return "🔴 Strong Resistance"
+        elif pcr <= 0.9:
+            return "🟠 Mild Resistance"
+        else:
+            return "⚪ Neutral"
+    out["Strike Bias"] = out.apply(strike_bias, axis=1)
+
+    # — IV Skew signal (PE IV vs CE IV)
+    def iv_signal(row):
+        if row["CE IV"] == 0 or row["PE IV"] == 0:
+            return "—"
+        ratio = row["PE IV"] / row["CE IV"]
+        if ratio > 1.3:
+            return "⬇️ Fear (High PE IV)"
+        elif ratio < 0.7:
+            return "⬆️ Greed (High CE IV)"
+        else:
+            return "➡️ Balanced"
+    out["IV Signal"] = out.apply(iv_signal, axis=1)
+
+    # — Distance from spot
+    out["Dist from Spot"] = (out["Strike Price"] - spot_price).round(1)
+    out["Dist %"] = ((out["Strike Price"] - spot_price) / spot_price * 100).round(2)
+
+    return out
+
+
+# ─────────────────────────────────────────────
+# Analysis
+# ─────────────────────────────────────────────
 class OptionAnalyzer:
     @staticmethod
     def calculate_pcr_analysis(df: pd.DataFrame) -> Dict:
-        total_call_oi = df["CE OI"].sum()
-        total_put_oi = df["PE OI"].sum()
-        total_call_vol = df["CE Volume"].sum()
-        total_put_vol = df["PE Volume"].sum()
-        
-        pcr_oi = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0
-        pcr_vol = round(total_put_vol / total_call_vol, 2) if total_call_vol > 0 else 0
-        
+        total_ce_oi  = df["CE OI"].sum()
+        total_pe_oi  = df["PE OI"].sum()
+        total_ce_vol = df["CE Volume"].sum()
+        total_pe_vol = df["PE Volume"].sum()
+        pcr_oi  = round(total_pe_oi  / total_ce_oi,  2) if total_ce_oi  > 0 else 0
+        pcr_vol = round(total_pe_vol / total_ce_vol, 2) if total_ce_vol > 0 else 0
         if pcr_oi > 1.2:
-            sentiment = "📈 Bullish"
-            description = "Strong Put Writing (Support Building)"
-            color = "green"
+            sentiment, description, color = "📈 Bullish", "Strong Put Writing – Support Building", "green"
         elif pcr_oi < 0.8:
-            sentiment = "📉 Bearish"
-            description = "Strong Call Writing (Resistance Building)"
-            color = "red"
+            sentiment, description, color = "📉 Bearish", "Strong Call Writing – Resistance Building", "red"
         else:
-            sentiment = "⚖️ Neutral"
-            description = "Balanced Market Conditions"
-            color = "orange"
-        
+            sentiment, description, color = "⚖️ Neutral", "Balanced Market Conditions", "orange"
         return {
-            "pcr_oi": pcr_oi,
-            "pcr_vol": pcr_vol,
-            "sentiment": sentiment,
-            "description": description,
-            "color": color,
-            "total_call_oi": total_call_oi,
-            "total_put_oi": total_put_oi,
-            "total_call_vol": total_call_vol,
-            "total_put_vol": total_put_vol
+            "pcr_oi": pcr_oi, "pcr_vol": pcr_vol,
+            "sentiment": sentiment, "description": description, "color": color,
+            "total_call_oi": total_ce_oi, "total_put_oi": total_pe_oi,
+            "total_call_vol": total_ce_vol, "total_put_vol": total_pe_vol,
         }
-    
+
     @staticmethod
-    def find_support_resistance(df: pd.DataFrame, spot_price: float, num_levels: int = 5) -> Tuple:
-        support_df = df[df["Strike Price"] <= spot_price].nlargest(num_levels, "PE OI")
-        supports = support_df[["Strike Price", "PE OI", "PE LTP"]].copy()
-        
-        resistance_df = df[df["Strike Price"] >= spot_price].nlargest(num_levels, "CE OI")
-        resistances = resistance_df[["Strike Price", "CE OI", "CE LTP"]].copy()
-        
-        nearest_support = support_df["Strike Price"].max() if not support_df.empty else None
-        nearest_resistance = resistance_df["Strike Price"].min() if not resistance_df.empty else None
-        
+    def find_support_resistance(df, spot_price, num_levels=5):
+        sup_df = df[df["Strike Price"] <= spot_price].nlargest(num_levels, "PE OI")
+        res_df = df[df["Strike Price"] >= spot_price].nlargest(num_levels, "CE OI")
+        supports    = sup_df[["Strike Price","PE OI","PE LTP"]].copy()
+        resistances = res_df[["Strike Price","CE OI","CE LTP"]].copy()
+        nearest_support    = sup_df["Strike Price"].max() if not sup_df.empty else None
+        nearest_resistance = res_df["Strike Price"].min() if not res_df.empty else None
         return supports, resistances, nearest_support, nearest_resistance
-    
+
     @staticmethod
-    def analyze_max_pain(df: pd.DataFrame) -> Tuple[Optional[float], pd.DataFrame]:
+    def analyze_max_pain(df):
         strikes = df["Strike Price"].unique()
         pain_values = []
-        
         for strike in strikes:
-            call_pain = ((df[df["Strike Price"] > strike]["CE OI"] * 
-                         (df[df["Strike Price"] > strike]["Strike Price"] - strike)).sum())
-            put_pain = ((df[df["Strike Price"] < strike]["PE OI"] * 
-                        (strike - df[df["Strike Price"] < strike]["Strike Price"])).sum())
-            total_pain = call_pain + put_pain
-            pain_values.append({"Strike": strike, "Pain": total_pain})
-        
+            call_pain = (df[df["Strike Price"] > strike]["CE OI"] *
+                         (df[df["Strike Price"] > strike]["Strike Price"] - strike)).sum()
+            put_pain  = (df[df["Strike Price"] < strike]["PE OI"] *
+                         (strike - df[df["Strike Price"] < strike]["Strike Price"])).sum()
+            pain_values.append({"Strike": strike, "Pain": call_pain + put_pain})
         pain_df = pd.DataFrame(pain_values)
-        max_pain_strike = pain_df.loc[pain_df["Pain"].idxmin(), "Strike"] if not pain_df.empty else None
-        
-        return max_pain_strike, pain_df
-    
+        max_pain = pain_df.loc[pain_df["Pain"].idxmin(), "Strike"] if not pain_df.empty else None
+        return max_pain, pain_df
+
     @staticmethod
-    def get_nearby_strikes(df: pd.DataFrame, spot_price: float, range_points: int = NEARBY_RANGE) -> pd.DataFrame:
-        nearby = df[
-            (df["Strike Price"] >= spot_price - range_points) & 
-            (df["Strike Price"] <= spot_price + range_points)
-        ].copy()
-        
-        nearby["OI Diff"] = nearby["PE OI"] - nearby["CE OI"]
+    def get_nearby_strikes(df, spot_price, range_points=NEARBY_RANGE):
+        nearby = df[(df["Strike Price"] >= spot_price - range_points) &
+                    (df["Strike Price"] <= spot_price + range_points)].copy()
+        nearby["OI Diff"]  = nearby["PE OI"] - nearby["CE OI"]
         nearby["OI Ratio"] = nearby.apply(
-            lambda row: round(row["PE OI"] / row["CE OI"], 2) if row["CE OI"] > 0 else 0,
-            axis=1
-        )
-        
-        median_ce_oi = nearby["CE OI"].median()
-        median_pe_oi = nearby["PE OI"].median()
-        
-        nearby["CE Signal"] = nearby["CE OI"].apply(lambda x: "🔴" if x > median_ce_oi else "")
-        nearby["PE Signal"] = nearby["PE OI"].apply(lambda x: "🟢" if x > median_pe_oi else "")
-        
+            lambda r: round(r["PE OI"] / r["CE OI"], 2) if r["CE OI"] > 0 else 0, axis=1)
+        med_ce = nearby["CE OI"].median()
+        med_pe = nearby["PE OI"].median()
+        nearby["CE Signal"] = nearby["CE OI"].apply(lambda x: "🔴" if x > med_ce else "")
+        nearby["PE Signal"] = nearby["PE OI"].apply(lambda x: "🟢" if x > med_pe else "")
         return nearby.sort_values("Strike Price")
-    
+
     @staticmethod
-    def generate_trading_signals(df: pd.DataFrame, spot_price: float, pcr_data: Dict, 
-                                 nearest_support: Optional[float], nearest_resistance: Optional[float]) -> Dict:
+    def generate_trading_signals(df, spot_price, pcr_data, nearest_support, nearest_resistance):
         pcr = pcr_data["pcr_oi"]
-        
-        signals = {
-            "call_buy": [],
-            "put_buy": [],
-            "call_sell": [],
-            "put_sell": [],
-            "market_bias": "",
-            "strategy": ""
-        }
-        
-        if pcr > 1.3:
-            signals["market_bias"] = "Strongly Bullish"
-            signals["strategy"] = "Buy Calls or Sell Puts"
-        elif pcr > 1.0:
-            signals["market_bias"] = "Moderately Bullish"
-            signals["strategy"] = "Buy ATM/OTM Calls"
-        elif pcr < 0.7:
-            signals["market_bias"] = "Strongly Bearish"
-            signals["strategy"] = "Buy Puts or Sell Calls"
-        elif pcr < 0.9:
-            signals["market_bias"] = "Moderately Bearish"
-            signals["strategy"] = "Buy ATM/OTM Puts"
-        else:
-            signals["market_bias"] = "Neutral/Rangebound"
-            signals["strategy"] = "Iron Condor or Straddle"
-        
-        atm_idx = (df['Strike Price'] - spot_price).abs().argsort()[0]
-        atm_strike = df.iloc[atm_idx]['Strike Price']
-        
+        signals = {"call_buy":[], "put_buy":[], "call_sell":[], "put_sell":[], "market_bias":"", "strategy":""}
+        if   pcr > 1.3: signals["market_bias"], signals["strategy"] = "Strongly Bullish",    "Buy Calls or Sell Puts"
+        elif pcr > 1.0: signals["market_bias"], signals["strategy"] = "Moderately Bullish",  "Buy ATM/OTM Calls"
+        elif pcr < 0.7: signals["market_bias"], signals["strategy"] = "Strongly Bearish",    "Buy Puts or Sell Calls"
+        elif pcr < 0.9: signals["market_bias"], signals["strategy"] = "Moderately Bearish",  "Buy ATM/OTM Puts"
+        else:           signals["market_bias"], signals["strategy"] = "Neutral/Rangebound",  "Iron Condor or Straddle"
+
+        atm_idx    = (df['Strike Price'] - spot_price).abs().idxmin()
+        atm_strike = df.loc[atm_idx, 'Strike Price']
+
         if pcr >= 1.0:
-            otm_calls = df[df['Strike Price'] > spot_price].nsmallest(2, 'Strike Price')
-            
             signals["call_buy"].append({
-                "strike": atm_strike,
-                "type": "ATM Call",
-                "target": nearest_resistance if nearest_resistance else spot_price + 500,
-                "stop_loss": nearest_support if nearest_support else spot_price - 200,
-                "reason": "ATM call for bullish move"
-            })
-            
-            if not otm_calls.empty:
+                "strike": atm_strike, "type": "ATM Call",
+                "target": nearest_resistance or spot_price + 500,
+                "stop_loss": nearest_support or spot_price - 200,
+                "reason": "ATM call for bullish move"})
+            otm_c = df[df['Strike Price'] > spot_price].nsmallest(2, 'Strike Price')
+            if not otm_c.empty:
                 signals["call_buy"].append({
-                    "strike": otm_calls.iloc[0]['Strike Price'],
-                    "type": "OTM Call",
-                    "target": nearest_resistance if nearest_resistance else spot_price + 700,
-                    "stop_loss": spot_price - 100,
-                    "reason": "OTM call for aggressive bullish trade"
-                })
-        
+                    "strike": otm_c.iloc[0]['Strike Price'], "type": "OTM Call",
+                    "target": nearest_resistance or spot_price + 700,
+                    "stop_loss": spot_price - 100, "reason": "OTM call – aggressive bullish"})
+
         if pcr <= 0.9:
-            otm_puts = df[df['Strike Price'] < spot_price].nlargest(2, 'Strike Price')
-            
             signals["put_buy"].append({
-                "strike": atm_strike,
-                "type": "ATM Put",
-                "target": nearest_support if nearest_support else spot_price - 500,
-                "stop_loss": nearest_resistance if nearest_resistance else spot_price + 200,
-                "reason": "ATM put for bearish move"
-            })
-            
-            if not otm_puts.empty:
+                "strike": atm_strike, "type": "ATM Put",
+                "target": nearest_support or spot_price - 500,
+                "stop_loss": nearest_resistance or spot_price + 200,
+                "reason": "ATM put for bearish move"})
+            otm_p = df[df['Strike Price'] < spot_price].nlargest(2, 'Strike Price')
+            if not otm_p.empty:
                 signals["put_buy"].append({
-                    "strike": otm_puts.iloc[0]['Strike Price'],
-                    "type": "OTM Put",
-                    "target": nearest_support if nearest_support else spot_price - 700,
-                    "stop_loss": spot_price + 100,
-                    "reason": "OTM put for aggressive bearish trade"
-                })
-        
+                    "strike": otm_p.iloc[0]['Strike Price'], "type": "OTM Put",
+                    "target": nearest_support or spot_price - 700,
+                    "stop_loss": spot_price + 100, "reason": "OTM put – aggressive bearish"})
+
         if pcr >= 1.2:
-            strong_supports = df[df["Strike Price"] < spot_price].nlargest(3, "PE OI")
-            if not strong_supports.empty:
-                strong_support = strong_supports.iloc[0]['Strike Price']
+            strong_sup = df[df["Strike Price"] < spot_price].nlargest(3, "PE OI")
+            if not strong_sup.empty:
+                ss = strong_sup.iloc[0]['Strike Price']
                 signals["put_sell"].append({
-                    "strike": strong_support,
-                    "type": "OTM Put Sell",
-                    "target": "Premium collection",
-                    "stop_loss": strong_support - 200,
-                    "reason": f"Strong support at {strong_support:,.0f} with high PE OI"
-                })
-        
+                    "strike": ss, "type": "OTM Put Sell",
+                    "target": "Premium collection", "stop_loss": ss - 200,
+                    "reason": f"Strong support at {ss:,.0f} – high PE OI"})
+
         if pcr <= 0.8:
-            strong_resistances = df[df["Strike Price"] > spot_price].nlargest(3, "CE OI")
-            if not strong_resistances.empty:
-                strong_resistance = strong_resistances.iloc[0]['Strike Price']
+            strong_res = df[df["Strike Price"] > spot_price].nlargest(3, "CE OI")
+            if not strong_res.empty:
+                sr = strong_res.iloc[0]['Strike Price']
                 signals["call_sell"].append({
-                    "strike": strong_resistance,
-                    "type": "OTM Call Sell",
-                    "target": "Premium collection",
-                    "stop_loss": strong_resistance + 200,
-                    "reason": f"Strong resistance at {strong_resistance:,.0f} with high CE OI"
-                })
-        
+                    "strike": sr, "type": "OTM Call Sell",
+                    "target": "Premium collection", "stop_loss": sr + 200,
+                    "reason": f"Strong resistance at {sr:,.0f} – high CE OI"})
         return signals
 
 
-# -------------------------
-# Chart Generator (keeping abbreviated)
-# -------------------------
+# ─────────────────────────────────────────────
+# Charts
+# ─────────────────────────────────────────────
 class ChartGenerator:
     @staticmethod
-    def create_oi_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-        fig = make_subplots(
-            rows=2, cols=1,
+    def create_oi_chart(df, spot_price):
+        fig = make_subplots(rows=2, cols=1,
             subplot_titles=("Open Interest Distribution", "Volume Distribution"),
-            vertical_spacing=0.12,
-            row_heights=[0.6, 0.4]
-        )
-        
-        fig.add_trace(
-            go.Bar(name="Call OI", x=df["Strike Price"], y=df["CE OI"], 
-                   marker_color='rgba(255, 99, 71, 0.7)'),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Bar(name="Put OI", x=df["Strike Price"], y=df["PE OI"], 
-                   marker_color='rgba(60, 179, 113, 0.7)'),
-            row=1, col=1
-        )
-        
-        fig.add_trace(
-            go.Bar(name="Call Vol", x=df["Strike Price"], y=df["CE Volume"], 
-                   marker_color='rgba(255, 140, 0, 0.7)', showlegend=False),
-            row=2, col=1
-        )
-        fig.add_trace(
-            go.Bar(name="Put Vol", x=df["Strike Price"], y=df["PE Volume"], 
-                   marker_color='rgba(30, 144, 255, 0.7)', showlegend=False),
-            row=2, col=1
-        )
-        
-        fig.add_vline(x=spot_price, line_dash="dash", line_color="yellow", 
-                      annotation_text=f"Spot: {spot_price:.0f}", row=1, col=1)
+            vertical_spacing=0.12, row_heights=[0.6, 0.4])
+        fig.add_trace(go.Bar(name="Call OI", x=df["Strike Price"], y=df["CE OI"],
+            marker_color='rgba(255,99,71,0.7)'), row=1, col=1)
+        fig.add_trace(go.Bar(name="Put OI", x=df["Strike Price"], y=df["PE OI"],
+            marker_color='rgba(60,179,113,0.7)'), row=1, col=1)
+        fig.add_trace(go.Bar(name="Call Vol", x=df["Strike Price"], y=df["CE Volume"],
+            marker_color='rgba(255,140,0,0.7)', showlegend=False), row=2, col=1)
+        fig.add_trace(go.Bar(name="Put Vol", x=df["Strike Price"], y=df["PE Volume"],
+            marker_color='rgba(30,144,255,0.7)', showlegend=False), row=2, col=1)
+        fig.add_vline(x=spot_price, line_dash="dash", line_color="yellow",
+            annotation_text=f"Spot: {spot_price:.0f}", row=1, col=1)
         fig.add_vline(x=spot_price, line_dash="dash", line_color="yellow", row=2, col=1)
-        
-        fig.update_layout(height=600, showlegend=True, hovermode='x unified',
-                         barmode='group', template='plotly_dark')
-        
+        fig.update_layout(height=600, hovermode='x unified', barmode='group', template='plotly_dark')
         return fig
-    
+
     @staticmethod
-    def create_iv_chart(df: pd.DataFrame) -> go.Figure:
+    def create_iv_chart(df):
         fig = go.Figure()
-        
         fig.add_trace(go.Scatter(x=df["Strike Price"], y=df["CE IV"],
             mode='lines+markers', name='Call IV', line=dict(color='red', width=2)))
-        
         fig.add_trace(go.Scatter(x=df["Strike Price"], y=df["PE IV"],
             mode='lines+markers', name='Put IV', line=dict(color='green', width=2)))
-        
         fig.update_layout(title="Implied Volatility Smile",
-            xaxis_title="Strike Price", yaxis_title="Implied Volatility (%)",
+            xaxis_title="Strike Price", yaxis_title="IV (%)",
             height=400, hovermode='x unified', template='plotly_dark')
-        
         return fig
-    
+
     @staticmethod
-    def create_pain_chart(pain_df: pd.DataFrame, spot_price: float) -> go.Figure:
+    def create_pain_chart(pain_df, spot_price):
         fig = go.Figure()
-        
         fig.add_trace(go.Scatter(x=pain_df["Strike"], y=pain_df["Pain"],
             mode='lines', fill='tozeroy', name='Total Pain',
             line=dict(color='purple', width=2)))
-        
-        fig.add_vline(x=spot_price, line_dash="dash", 
-                      annotation_text="Spot", line_color="yellow")
-        
+        fig.add_vline(x=spot_price, line_dash="dash", annotation_text="Spot", line_color="yellow")
         fig.update_layout(title="Max Pain Distribution",
-            xaxis_title="Strike Price", yaxis_title="Total Pain Value",
+            xaxis_title="Strike Price", yaxis_title="Pain Value",
             height=300, template='plotly_dark')
-        
+        return fig
+
+    @staticmethod
+    def create_total_oi_donut(totals: Dict) -> go.Figure:
+        fig = make_subplots(rows=1, cols=2,
+            subplot_titles=("OI Distribution", "Premium Distribution"),
+            specs=[[{"type":"domain"},{"type":"domain"}]])
+        fig.add_trace(go.Pie(
+            labels=["Call OI", "Put OI"],
+            values=[totals["total_ce_oi"], totals["total_pe_oi"]],
+            hole=0.55, marker_colors=["#ff6347","#3cb371"],
+            textinfo="label+percent"), row=1, col=1)
+        fig.add_trace(go.Pie(
+            labels=["Call Premium", "Put Premium"],
+            values=[totals["total_ce_premium"], totals["total_pe_premium"]],
+            hole=0.55, marker_colors=["#ffa07a","#90ee90"],
+            textinfo="label+percent"), row=1, col=2)
+        fig.update_layout(height=320, template='plotly_dark', showlegend=True)
+        return fig
+
+    @staticmethod
+    def create_notional_bar(enriched: pd.DataFrame, spot_price: float) -> go.Figure:
+        nearby = enriched[
+            (enriched["Strike Price"] >= spot_price - NEARBY_RANGE) &
+            (enriched["Strike Price"] <= spot_price + NEARBY_RANGE)
+        ]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="CE Notional", x=nearby["Strike Price"], y=nearby["CE Notional"],
+            marker_color='rgba(255,80,50,0.75)'))
+        fig.add_trace(go.Bar(name="PE Notional", x=nearby["Strike Price"], y=nearby["PE Notional"],
+            marker_color='rgba(50,200,100,0.75)'))
+        fig.add_vline(x=spot_price, line_dash="dash", line_color="yellow",
+            annotation_text=f"Spot {spot_price:.0f}")
+        fig.update_layout(title="Notional Premium (LTP × OI) – Nearby Strikes",
+            height=350, barmode='group', hovermode='x unified', template='plotly_dark',
+            yaxis_title="Notional ₹")
+        return fig
+
+    @staticmethod
+    def create_straddle_curve(enriched: pd.DataFrame, spot_price: float) -> go.Figure:
+        nearby = enriched[
+            (enriched["Strike Price"] >= spot_price - NEARBY_RANGE) &
+            (enriched["Strike Price"] <= spot_price + NEARBY_RANGE)
+        ]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=nearby["Strike Price"], y=nearby["Straddle"],
+            mode='lines+markers', name='Straddle Price',
+            fill='tozeroy', line=dict(color='#ff9f40', width=2)))
+        fig.add_vline(x=spot_price, line_dash="dash", line_color="yellow",
+            annotation_text=f"ATM {spot_price:.0f}")
+        fig.update_layout(title="Straddle (CE LTP + PE LTP) across Strikes",
+            height=300, hovermode='x unified', template='plotly_dark',
+            yaxis_title="Straddle ₹")
+        return fig
+
+    @staticmethod
+    def create_pcr_heatmap(enriched: pd.DataFrame, spot_price: float) -> go.Figure:
+        nearby = enriched[
+            (enriched["Strike Price"] >= spot_price - NEARBY_RANGE) &
+            (enriched["Strike Price"] <= spot_price + NEARBY_RANGE)
+        ].copy()
+        nearby["Strike PCR"] = nearby["Strike PCR"].fillna(0)
+        fig = go.Figure(go.Bar(
+            x=nearby["Strike Price"],
+            y=nearby["Strike PCR"],
+            marker=dict(
+                color=nearby["Strike PCR"],
+                colorscale=[
+                    [0.0, "#ff4040"], [0.4, "#ff9933"],
+                    [0.5, "#888888"], [0.6, "#33cc66"],
+                    [1.0, "#00aa00"]
+                ],
+                cmin=0, cmax=2,
+                colorbar=dict(title="PCR", x=1.01)
+            ),
+            name="Strike PCR"
+        ))
+        fig.add_hline(y=1.0, line_dash="dash", line_color="white", annotation_text="PCR=1")
+        fig.add_vline(x=spot_price, line_dash="dash", line_color="yellow")
+        fig.update_layout(title="Per-Strike PCR (Put/Call OI Ratio)",
+            height=320, hovermode='x unified', template='plotly_dark',
+            yaxis_title="PCR")
         return fig
 
 
-# -------------------------
-# UI Components
-# -------------------------
-def render_day_range(spot_price: float, day_high: Optional[float], day_low: Optional[float]):
-    if not (day_high and day_low):
-        return
-    
-    day_range = day_high - day_low
-    range_pct = (day_range / day_low) * 100
-    position_in_range = ((spot_price - day_low) / day_range) * 100 if day_range > 0 else 50
-    
+# ─────────────────────────────────────────────
+# UI Helpers
+# ─────────────────────────────────────────────
+def render_day_range(spot_price, day_high, day_low):
+    if not (day_high and day_low): return
+    day_range  = day_high - day_low
+    range_pct  = (day_range / day_low) * 100
+    pos_in_rng = ((spot_price - day_low) / day_range * 100) if day_range > 0 else 50
     st.markdown(f"""
-    <div style='padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                border-radius: 10px; margin: 15px 0; color: white;'>
-        <h3 style='margin: 0 0 15px 0; text-align: center;'>📊 Index Day Range</h3>
-        <div style='display: flex; justify-content: space-around; text-align: center;'>
-            <div>
-                <div style='font-size: 14px; opacity: 0.9;'>Day Low</div>
-                <div style='font-size: 24px; font-weight: bold;'>{format_currency(day_low)}</div>
-            </div>
-            <div>
-                <div style='font-size: 14px; opacity: 0.9;'>Current (Spot)</div>
-                <div style='font-size: 28px; font-weight: bold; color: #FFD700;'>{format_currency(spot_price)}</div>
-                <div style='font-size: 12px; margin-top: 5px;'>{position_in_range:.1f}% in range</div>
-            </div>
-            <div>
-                <div style='font-size: 14px; opacity: 0.9;'>Day High</div>
-                <div style='font-size: 24px; font-weight: bold;'>{format_currency(day_high)}</div>
-            </div>
+    <div style='padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+                border-radius:10px;margin:15px 0;color:white;'>
+        <h3 style='margin:0 0 15px 0;text-align:center;'>📊 Index Day Range</h3>
+        <div style='display:flex;justify-content:space-around;text-align:center;'>
+            <div><div style='font-size:13px;opacity:.85'>Day Low</div>
+                 <div style='font-size:22px;font-weight:700'>{fmt(day_low)}</div></div>
+            <div><div style='font-size:13px;opacity:.85'>Current (Spot)</div>
+                 <div style='font-size:26px;font-weight:700;color:#FFD700'>{fmt(spot_price)}</div>
+                 <div style='font-size:11px;margin-top:4px'>{pos_in_rng:.1f}% in range</div></div>
+            <div><div style='font-size:13px;opacity:.85'>Day High</div>
+                 <div style='font-size:22px;font-weight:700'>{fmt(day_high)}</div></div>
         </div>
-        <div style='margin-top: 20px; background: rgba(255,255,255,0.2); border-radius: 10px; padding: 3px;'>
-            <div style='width: {position_in_range}%; background: linear-gradient(90deg, #00ff00, #ffd700, #ff0000); 
-                        height: 25px; border-radius: 8px; transition: width 0.3s;'></div>
+        <div style='margin-top:18px;background:rgba(255,255,255,.2);border-radius:10px;padding:3px'>
+            <div style='width:{min(pos_in_rng,100)}%;background:linear-gradient(90deg,#00ff00,#ffd700,#ff0000);
+                        height:22px;border-radius:8px'></div>
         </div>
-        <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 14px;'>
-            <div>Range: {format_currency(day_range)}</div>
-            <div>Movement: {range_pct:.2f}%</div>
+        <div style='display:flex;justify-content:space-between;margin-top:10px;font-size:13px'>
+            <div>Range: {fmt(day_range)}</div><div>Movement: {range_pct:.2f}%</div>
         </div>
-    </div>
+    </div>""", unsafe_allow_html=True)
+
+
+def render_totals_panel(totals: Dict, spot_price: float):
+    """Big summary panel: Total OI, Volume, Premium, Straddle, Breakeven"""
+    st.markdown("""
+    <h3 style='margin:0 0 10px 0'>📦 Total OI · Volume · Premium Summary</h3>
     """, unsafe_allow_html=True)
 
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(f"""
+        <div class='metric-card'>
+          <div class='label'>📊 Total Open Interest</div>
+          <div class='value'>{totals['total_oi']:,.0f}</div>
+          <div style='display:flex;justify-content:space-around;margin-top:10px;font-size:13px'>
+            <span style='color:#ff6347'>🔴 CE: {totals['total_ce_oi']:,.0f}</span>
+            <span style='color:#3cb371'>🟢 PE: {totals['total_pe_oi']:,.0f}</span>
+          </div>
+          <div style='font-size:12px;margin-top:6px;opacity:.7'>
+            OI Skew (PE-CE): {"+" if totals['oi_skew']>=0 else ""}{totals['oi_skew']:.1f}%
+          </div>
+        </div>""", unsafe_allow_html=True)
 
-def render_trading_signal(signal: Dict, signal_type: str):
+    with c2:
+        st.markdown(f"""
+        <div class='metric-card'>
+          <div class='label'>🔄 Total Volume</div>
+          <div class='value'>{totals['total_vol']:,.0f}</div>
+          <div style='display:flex;justify-content:space-around;margin-top:10px;font-size:13px'>
+            <span style='color:#ff6347'>🔴 CE: {totals['total_ce_vol']:,.0f}</span>
+            <span style='color:#3cb371'>🟢 PE: {totals['total_pe_vol']:,.0f}</span>
+          </div>
+          <div style='font-size:12px;margin-top:6px;opacity:.7'>
+            Vol PCR: {totals['pcr_vol']:.2f}
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+    with c3:
+        st.markdown(f"""
+        <div class='metric-card'>
+          <div class='label'>💰 Total Notional Premium</div>
+          <div class='value'>{fmt_cr(totals['total_premium'])}</div>
+          <div style='display:flex;justify-content:space-around;margin-top:10px;font-size:13px'>
+            <span style='color:#ff6347'>🔴 CE: {fmt_cr(totals['total_ce_premium'])}</span>
+            <span style='color:#3cb371'>🟢 PE: {fmt_cr(totals['total_pe_premium'])}</span>
+          </div>
+          <div style='font-size:12px;margin-top:6px;opacity:.7'>
+            Prem Skew (PE-CE): {"+" if totals['premium_skew']>=0 else ""}{totals['premium_skew']:.1f}%
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    c4, c5, c6, c7 = st.columns(4)
+
+    with c4:
+        st.markdown(f"""
+        <div class='metric-card'>
+          <div class='label'>🎯 ATM Strike</div>
+          <div class='value'>{fmt(totals['atm_strike'])}</div>
+          <div style='font-size:12px;margin-top:6px;opacity:.7'>CE LTP: {fmt(totals['atm_ce_ltp'])} | PE LTP: {fmt(totals['atm_pe_ltp'])}</div>
+        </div>""", unsafe_allow_html=True)
+
+    with c5:
+        st.markdown(f"""
+        <div class='metric-card'>
+          <div class='label'>📐 ATM Straddle Price</div>
+          <div class='value' style='color:#ffd700'>{fmt(totals['straddle_price'])}</div>
+          <div style='font-size:12px;margin-top:6px;opacity:.7'>
+            {(totals['straddle_price']/totals['atm_strike']*100):.2f}% of spot
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+    with c6:
+        st.markdown(f"""
+        <div class='metric-card'>
+          <div class='label'>⬆️ Breakeven Up</div>
+          <div class='value' style='color:#3cb371'>{fmt(totals['breakeven_up'])}</div>
+          <div style='font-size:12px;margin-top:6px;opacity:.7'>+{fmt(totals['breakeven_up']-spot_price)} from spot</div>
+        </div>""", unsafe_allow_html=True)
+
+    with c7:
+        st.markdown(f"""
+        <div class='metric-card'>
+          <div class='label'>⬇️ Breakeven Down</div>
+          <div class='value' style='color:#ff6347'>{fmt(totals['breakeven_down'])}</div>
+          <div style='font-size:12px;margin-top:6px;opacity:.7'>-{fmt(spot_price-totals['breakeven_down'])} from spot</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    ce_c, pe_c = st.columns(2)
+    with ce_c:
+        st.info(f"🔴 **Max Call OI at:** {fmt(totals['max_ce_strike'])} (Primary Resistance)")
+    with pe_c:
+        st.info(f"🟢 **Max Put OI at:** {fmt(totals['max_pe_strike'])} (Primary Support)")
+
+
+def render_trading_signal(signal, signal_type):
     colors = {
-        "call_buy": ("green", "🟢"),
-        "put_buy": ("red", "🔴"),
-        "put_sell": ("darkgreen", "💰"),
-        "call_sell": ("darkred", "💰")
+        "call_buy":  ("green",    "🟢"),
+        "put_buy":   ("red",      "🔴"),
+        "put_sell":  ("darkgreen","💰"),
+        "call_sell": ("darkred",  "💰"),
     }
-    
-    color, icon = colors.get(signal_type, ("gray", "•"))
-    
+    color, icon = colors.get(signal_type, ("gray","•"))
+    tgt = fmt(signal['target']) if isinstance(signal['target'], (int,float)) else signal['target']
     st.markdown(f"""
-    <div style='padding: 15px; background-color: rgba(0, 255, 0, 0.1); border-left: 4px solid {color}; 
-                border-radius: 5px; margin: 10px 0;'>
-        <h4 style='margin: 0 0 10px 0; color: {color};'>{icon} {signal['type']} - Strike: {format_currency(signal['strike'])}</h4>
-        <p style='margin: 5px 0;'><strong>Target:</strong> {format_currency(signal['target']) if isinstance(signal['target'], (int, float)) else signal['target']}</p>
-        <p style='margin: 5px 0;'><strong>Stop Loss (Spot):</strong> {format_currency(signal['stop_loss'])}</p>
-        <p style='margin: 5px 0;'><strong>Reason:</strong> {signal['reason']}</p>
-    </div>
-    """, unsafe_allow_html=True)
+    <div style='padding:14px;background-color:rgba(0,255,0,0.08);border-left:4px solid {color};border-radius:5px;margin:8px 0'>
+        <h4 style='margin:0 0 8px 0;color:{color}'>{icon} {signal['type']} – Strike: {fmt(signal['strike'])}</h4>
+        <p style='margin:4px 0'><strong>Target:</strong> {tgt}</p>
+        <p style='margin:4px 0'><strong>Stop Loss (Spot):</strong> {fmt(signal['stop_loss'])}</p>
+        <p style='margin:4px 0'><strong>Reason:</strong> {signal['reason']}</p>
+    </div>""", unsafe_allow_html=True)
 
 
-# -------------------------
-# Main Dashboard
-# -------------------------
+def _style_chain(df: pd.DataFrame) -> pd.DataFrame.style:
+    """Color-code the enriched chain dataframe"""
+    def color_bias(val):
+        if "Strong Support"     in str(val): return "background-color:#0f4f2f;color:#90ff90"
+        if "Mild Support"       in str(val): return "background-color:#1a3a1a;color:#ccffcc"
+        if "Strong Resistance"  in str(val): return "background-color:#4f0f0f;color:#ff9090"
+        if "Mild Resistance"    in str(val): return "background-color:#3a1a1a;color:#ffcccc"
+        return ""
+
+    def color_conc(val):
+        if "HIGH" in str(val): return "font-weight:700;color:#ffd700"
+        return ""
+
+    def color_surge(val):
+        if "SURGE" in str(val): return "background-color:#4a3000;color:#ffd080;font-weight:700"
+        return ""
+
+    def color_iv(val):
+        if "Fear"   in str(val): return "color:#ff6666"
+        if "Greed"  in str(val): return "color:#66ff66"
+        return ""
+
+    styled = df.style \
+        .applymap(color_bias,   subset=["Strike Bias"]) \
+        .applymap(color_conc,   subset=["CE Concentration","PE Concentration"]) \
+        .applymap(color_surge,  subset=["CE Vol Surge","PE Vol Surge"]) \
+        .applymap(color_iv,     subset=["IV Signal"]) \
+        .background_gradient(subset=["Strike PCR"], cmap="RdYlGn", vmin=0, vmax=2) \
+        .format({
+            "Strike Price": lambda x: f"{x:,.0f}",
+            "CE OI":        lambda x: f"{x:,.0f}",
+            "PE OI":        lambda x: f"{x:,.0f}",
+            "CE LTP":       lambda x: f"₹{x:,.2f}",
+            "PE LTP":       lambda x: f"₹{x:,.2f}",
+            "CE Volume":    lambda x: f"{x:,.0f}",
+            "PE Volume":    lambda x: f"{x:,.0f}",
+            "CE Notional":  lambda x: fmt_cr(x),
+            "PE Notional":  lambda x: fmt_cr(x),
+            "Straddle":     lambda x: f"₹{x:,.2f}",
+            "Strike PCR":   lambda x: f"{x:.2f}" if not pd.isna(x) else "—",
+            "Dist %":       lambda x: f"{x:+.2f}%",
+        }, na_rep="—")
+    return styled
+
+
+# ─────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────
 def main():
-    st.title("📈 BSE Option Chain Live Dashboard")
-    st.markdown("**Real-time Support, Resistance, and Advanced Market Analytics**")
-    
-    analyzer = OptionAnalyzer()
+    st.title("📈 BSE Option Chain Pro Dashboard")
+    st.markdown("**Real-time OI · Volume · Premium · Decision Analytics**")
+
+    analyzer  = OptionAnalyzer()
     chart_gen = ChartGenerator()
-    
-    # Sidebar Configuration
+
+    # ── Sidebar ──────────────────────────────
     with st.sidebar:
         st.header("⚙️ Configuration")
-        
-        # Scrip Code
         scrip_cd = st.text_input("Scrip Code", DEFAULT_SCRIP, help="BSE scrip code")
-        
         st.divider()
-        
-        # ===== HYBRID EXPIRY SELECTION =====
-        st.subheader("📅 Expiry Date Selection")
-        
-        # Radio button to choose input method
-        expiry_input_method = st.radio(
-            "Choose input method:",
-            ["Dropdown (Auto-loaded)", "Manual Entry"],
-            help="Use dropdown for common dates or manual entry for any date"
-        )
-        
+
+        st.subheader("📅 Expiry Date")
+        expiry_input_method = st.radio("Input method:", ["Dropdown (Auto-loaded)", "Manual Entry"])
+
         if expiry_input_method == "Dropdown (Auto-loaded)":
-            # Fetch and display dropdown
-            with st.spinner("🔄 Loading expiry dates..."):
+            with st.spinner("Loading expiry dates..."):
                 expiry_dates = fetch_expiry_dates(scrip_cd)
-            
             if expiry_dates:
-                expiry = st.selectbox(
-                    "Select Expiry Date",
-                    options=expiry_dates,
-                    index=0,
-                    help="Select from available expiry dates"
-                )
+                expiry = st.selectbox("Select Expiry", options=expiry_dates, index=0)
                 st.success(f"✅ {len(expiry_dates)} dates loaded")
             else:
-                st.error("Failed to load expiry dates")
-                expiry = st.text_input(
-                    "Enter Expiry Date",
-                    "13 Nov 2025",
-                    help="Format: DD MMM YYYY (e.g., 13 Nov 2025)"
-                )
+                st.error("Failed to load dates")
+                expiry = st.text_input("Enter Expiry", "13 Nov 2025")
         else:
-            # Manual entry
-            expiry = st.text_input(
-                "Enter Expiry Date",
-                "13 Nov 2025",
-                help="Format: DD MMM YYYY (e.g., 13 Nov 2025)"
-            )
-            
-            # Validate format
-            if validate_expiry_format(expiry):
-                st.success("✅ Valid date format")
-            else:
-                st.warning("⚠️ Format should be: DD MMM YYYY (e.g., 13 Nov 2025)")
-        
-        st.info("💡 **Tip:** Switch to manual entry if your desired expiry date is not in the dropdown")
-        
+            expiry = st.text_input("Enter Expiry", "13 Nov 2025", help="DD MMM YYYY")
+            if validate_expiry_format(expiry): st.success("✅ Valid format")
+            else: st.warning("⚠️ Use DD MMM YYYY")
+
         st.divider()
-        
-        # Manual Spot Price Override
-        manual_spot = st.checkbox("Override Spot Price", value=False)
-        custom_spot = st.number_input("Enter Spot Price", min_value=0.0, value=50000.0, 
-                                      step=100.0, disabled=not manual_spot)
-        
+        manual_spot  = st.checkbox("Override Spot Price", value=False)
+        custom_spot  = st.number_input("Enter Spot Price", min_value=0.0, value=50000.0,
+                                       step=100.0, disabled=not manual_spot)
         st.divider()
-        
-        # Auto Refresh
-        auto_refresh = st.checkbox("Auto Refresh", value=False)
-        refresh_rate = st.slider("Refresh Interval (sec)", 10, 120, 30, disabled=not auto_refresh)
-        
+        auto_refresh  = st.checkbox("Auto Refresh", value=False)
+        refresh_rate  = st.slider("Refresh Interval (sec)", 10, 120, 30, disabled=not auto_refresh)
         st.divider()
-        
-        # Advanced Settings
         show_advanced = st.checkbox("Show Advanced Analytics", value=True)
-        num_levels = st.slider("Support/Resistance Levels", 3, 10, 5)
-        
+        num_levels    = st.slider("Support/Resistance Levels", 3, 10, 5)
+        nearby_range  = st.slider("Nearby Range (pts)", 100, 2000, NEARBY_RANGE, step=100)
         st.divider()
-        st.caption(f"🕐 Last Updated: {datetime.now().strftime('%H:%M:%S')}")
-        
-        # Refresh Button
+        st.caption(f"🕐 {datetime.now().strftime('%H:%M:%S')}")
         if st.button("🔄 Refresh Data"):
             st.cache_data.clear()
             st.rerun()
-    
-    # Fetch Data
-    with st.spinner("🔄 Fetching option chain data..."):
+
+    # ── Fetch ─────────────────────────────────
+    with st.spinner("Fetching option chain data..."):
         df, spot_price, error, day_high, day_low = fetch_bse_option_chain(expiry, scrip_cd)
-    
+
     if error:
         st.error(error)
-        st.info("""
-        💡 **Troubleshooting Tips:**
-        - Check your internet connection
-        - Verify the expiry date is valid and has trading data
-        - Ensure scrip code is correct
-        - Try switching between dropdown and manual entry
-        - Some expiry dates may not have data available yet
-        """)
         st.stop()
-    
     if df is None or df.empty:
-        st.warning(f"⚠️ No data available for expiry: {expiry}")
-        st.info("Try a different expiry date or check if this expiry has active options trading.")
+        st.warning(f"No data for expiry: {expiry}")
         st.stop()
-    
-    # Use custom spot price if provided
+
     if manual_spot and custom_spot:
-        original_spot = spot_price
+        st.info(f"ℹ️ Manual spot: {fmt(custom_spot)} (API: {fmt(spot_price)})")
         spot_price = custom_spot
-        st.info(f"ℹ️ Using manually set spot price: {format_currency(spot_price)} (API: {format_currency(original_spot)})")
-    
-    # Calculate Analysis
+
+    # ── Compute ───────────────────────────────
+    totals   = compute_totals(df, spot_price)
+    enriched = enrich_chain(df, spot_price)
     pcr_data = analyzer.calculate_pcr_analysis(df)
-    supports, resistances, nearest_support, nearest_resistance = analyzer.find_support_resistance(
-        df, spot_price, num_levels
-    )
+    supports, resistances, nearest_support, nearest_resistance = \
+        analyzer.find_support_resistance(df, spot_price, num_levels)
     trading_signals = analyzer.generate_trading_signals(
-        df, spot_price, pcr_data, nearest_support, nearest_resistance
-    )
-    
-    # Success message
-    st.success(f"✅ Data loaded successfully for {expiry} | {len(df)} active strikes")
-    
-    # Day Range Display
+        df, spot_price, pcr_data, nearest_support, nearest_resistance)
+
+    st.success(f"✅ {expiry} · {len(df)} active strikes loaded")
+
+    # ── Day Range ─────────────────────────────
     render_day_range(spot_price, day_high, day_low)
-    
-    # Key Metrics Row
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    
-    with col1:
-        st.metric("💰 Spot Price", format_currency(spot_price))
-    
-    with col2:
-        if day_high:
-            delta_high = day_high - spot_price
-            st.metric("📈 Day High", format_currency(day_high), 
-                     f"-{delta_high:.2f}" if delta_high > 0 else "At High")
-        else:
-            st.metric("📈 Day High", "N/A")
-    
-    with col3:
-        if day_low:
-            delta_low = spot_price - day_low
-            st.metric("📉 Day Low", format_currency(day_low), 
-                     f"+{delta_low:.2f}" if delta_low > 0 else "At Low")
-        else:
-            st.metric("📉 Day Low", "N/A")
-    
-    with col4:
-        st.metric("📊 PCR (OI)", pcr_data["pcr_oi"])
-    
-    with col5:
-        if nearest_support:
-            delta_support = spot_price - nearest_support
-            st.metric("🟢 Support", format_currency(nearest_support), f"-{delta_support:.0f}")
-        else:
-            st.metric("🟢 Support", "N/A")
-    
-    with col6:
-        if nearest_resistance:
-            delta_resistance = nearest_resistance - spot_price
-            st.metric("🔴 Resistance", format_currency(nearest_resistance), f"+{delta_resistance:.0f}")
-        else:
-            st.metric("🔴 Resistance", "N/A")
-    
-    # Market Sentiment
+
+    # ── Key Metrics row ───────────────────────
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    with c1: st.metric("💰 Spot",          fmt(spot_price))
+    with c2: st.metric("📈 Day High",       fmt(day_high) if day_high else "N/A")
+    with c3: st.metric("📉 Day Low",        fmt(day_low) if day_low else "N/A")
+    with c4: st.metric("📊 PCR (OI)",       totals["pcr_oi"])
+    with c5: st.metric("🟢 Support",        fmt(nearest_support) if nearest_support else "N/A",
+                        f"-{spot_price-nearest_support:.0f}" if nearest_support else "")
+    with c6: st.metric("🔴 Resistance",     fmt(nearest_resistance) if nearest_resistance else "N/A",
+                        f"+{nearest_resistance-spot_price:.0f}" if nearest_resistance else "")
+
+    # ── Sentiment bar ─────────────────────────
     st.markdown(f"""
-    <div style='padding: 15px; background-color: {pcr_data['color']}22; border-left: 5px solid {pcr_data['color']}; 
-                border-radius: 5px; margin: 20px 0;'>
-        <h3 style='color: {pcr_data['color']}; margin: 0;'>{pcr_data['sentiment']}</h3>
-        <p style='margin: 5px 0 0 0;'>{pcr_data['description']}</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
+    <div style='padding:14px;background-color:{pcr_data['color']}22;
+                border-left:5px solid {pcr_data['color']};border-radius:5px;margin:18px 0'>
+        <h3 style='color:{pcr_data['color']};margin:0'>{pcr_data['sentiment']}</h3>
+        <p style='margin:5px 0 0 0'>{pcr_data['description']}</p>
+    </div>""", unsafe_allow_html=True)
+
     st.divider()
-    
-    # Trading Signals
+
+    # ── Total OI / Volume / Premium Panel ─────
+    render_totals_panel(totals, spot_price)
+
+    # ── OI / Premium donut charts ─────────────
+    st.plotly_chart(chart_gen.create_total_oi_donut(totals), use_container_width=True)
+
+    st.divider()
+
+    # ── Trading Signals ───────────────────────
     st.header("🎯 Trading Signals")
-    
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Call Buy", "📉 Put Buy", "💰 Put Sell", "💰 Call Sell"])
-    
-    with tab1:
-        if trading_signals["call_buy"]:
-            for signal in trading_signals["call_buy"]:
-                render_trading_signal(signal, "call_buy")
-        else:
-            st.warning("No call buying opportunities")
-    
-    with tab2:
-        if trading_signals["put_buy"]:
-            for signal in trading_signals["put_buy"]:
-                render_trading_signal(signal, "put_buy")
-        else:
-            st.warning("No put buying opportunities")
-    
-    with tab3:
-        if trading_signals["put_sell"]:
-            for signal in trading_signals["put_sell"]:
-                render_trading_signal(signal, "put_sell")
-        else:
-            st.info("No put selling opportunities")
-    
-    with tab4:
-        if trading_signals["call_sell"]:
-            for signal in trading_signals["call_sell"]:
-                render_trading_signal(signal, "call_sell")
-        else:
-            st.info("No call selling opportunities")
-    
+    tab_cb, tab_pb, tab_ps, tab_cs = st.tabs(["📈 Call Buy","📉 Put Buy","💰 Put Sell","💰 Call Sell"])
+    with tab_cb:
+        [render_trading_signal(s,"call_buy") for s in trading_signals["call_buy"]] or st.warning("No call buy setups")
+    with tab_pb:
+        [render_trading_signal(s,"put_buy")  for s in trading_signals["put_buy"]]  or st.warning("No put buy setups")
+    with tab_ps:
+        [render_trading_signal(s,"put_sell") for s in trading_signals["put_sell"]] or st.info("No put sell setups")
+    with tab_cs:
+        [render_trading_signal(s,"call_sell") for s in trading_signals["call_sell"]] or st.info("No call sell setups")
+
     st.divider()
-    
-    # Support & Resistance
-    col1, col2 = st.columns(2)
-    
-    with col1:
+
+    # ── Support & Resistance ──────────────────
+    s_col, r_col = st.columns(2)
+    with s_col:
         st.subheader("🟢 Support Levels")
         st.dataframe(supports.style.format({
-            "Strike Price": lambda x: format_currency(x),
+            "Strike Price": lambda x: fmt(x),
             "PE OI": lambda x: f"{x:,.0f}",
-            "PE LTP": lambda x: format_currency(x)
+            "PE LTP": lambda x: fmt(x)
         }), hide_index=True, use_container_width=True)
-    
-    with col2:
+    with r_col:
         st.subheader("🔴 Resistance Levels")
         st.dataframe(resistances.style.format({
-            "Strike Price": lambda x: format_currency(x),
+            "Strike Price": lambda x: fmt(x),
             "CE OI": lambda x: f"{x:,.0f}",
-            "CE LTP": lambda x: format_currency(x)
+            "CE LTP": lambda x: fmt(x)
         }), hide_index=True, use_container_width=True)
-    
+
     st.divider()
-    
-    # Charts
+
+    # ── OI & Volume Charts ────────────────────
     st.subheader("📊 OI & Volume Analysis")
-    oi_chart = chart_gen.create_oi_chart(df, spot_price)
-    st.plotly_chart(oi_chart, use_container_width=True)
-    
-    # Advanced Analytics
+    st.plotly_chart(chart_gen.create_oi_chart(df, spot_price), use_container_width=True)
+
+    # ── Notional Premium Chart ────────────────
+    st.subheader("💰 Notional Premium by Strike")
+    st.plotly_chart(chart_gen.create_notional_bar(enriched, spot_price), use_container_width=True)
+
+    # ── Straddle Curve ────────────────────────
+    st.subheader("📐 Straddle Price Curve")
+    st.plotly_chart(chart_gen.create_straddle_curve(enriched, spot_price), use_container_width=True)
+
+    # ── Per-Strike PCR Heatmap ────────────────
+    st.subheader("🌡️ Per-Strike PCR Heatmap")
+    st.plotly_chart(chart_gen.create_pcr_heatmap(enriched, spot_price), use_container_width=True)
+
+    # ── Advanced Analytics ────────────────────
     if show_advanced:
         st.divider()
         st.subheader("🎯 Advanced Analytics")
-        
-        tab1, tab2, tab3 = st.tabs(["Max Pain", "IV Smile", "Full Chain"])
-        
-        with tab1:
+        adv1, adv2, adv3, adv4 = st.tabs(["Max Pain","IV Smile","Full Chain (Enriched)","Nearby Strikes"])
+
+        with adv1:
             max_pain, pain_df = analyzer.analyze_max_pain(df)
-            
             if max_pain:
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.metric("🎯 Max Pain", format_currency(max_pain))
-                with col2:
+                mc1, mc2 = st.columns([1,2])
+                with mc1:
+                    st.metric("🎯 Max Pain", fmt(max_pain))
+                    delta = spot_price - max_pain
+                    st.metric("Δ Spot vs Max Pain", f"{delta:+.0f}", delta_color="inverse")
+                with mc2:
                     if not pain_df.empty:
-                        st.plotly_chart(chart_gen.create_pain_chart(pain_df, spot_price), 
-                                       use_container_width=True)
-        
-        with tab2:
-            iv_chart = chart_gen.create_iv_chart(df)
-            st.plotly_chart(iv_chart, use_container_width=True)
-        
-        with tab3:
-            st.dataframe(df, hide_index=True, use_container_width=True, height=400)
-    
-    # Footer
+                        st.plotly_chart(chart_gen.create_pain_chart(pain_df, spot_price),
+                                        use_container_width=True)
+
+        with adv2:
+            st.plotly_chart(chart_gen.create_iv_chart(df), use_container_width=True)
+
+        with adv3:
+            st.markdown("""
+            **Decision columns:**
+            - **Strike Bias** — per-strike PCR interpretation  
+            - **CE / PE Concentration** — OI in top 20% bucket  
+            - **CE / PE Vol Surge** — volume > 2× median  
+            - **IV Signal** — PE IV vs CE IV skew  
+            - **Straddle** — CE LTP + PE LTP  
+            - **CE / PE Notional** — LTP × OI (money deployed)  
+            - **Strike PCR** — color-graded Put/Call OI ratio  
+            """)
+
+            display_cols = [
+                "Strike Price","Dist from Spot","Dist %","Moneyness",
+                "CE OI","CE LTP","CE Volume","CE IV","CE Concentration","CE Vol Surge","CE Notional",
+                "PE OI","PE LTP","PE Volume","PE IV","PE Concentration","PE Vol Surge","PE Notional",
+                "Strike PCR","Straddle","Strike Bias","IV Signal"
+            ]
+            existing_cols = [c for c in display_cols if c in enriched.columns]
+
+            # Filter to nearby by default for readability
+            show_all = st.checkbox("Show all strikes (may be slow)", value=False)
+            chain_df = enriched if show_all else enriched[
+                (enriched["Strike Price"] >= spot_price - nearby_range) &
+                (enriched["Strike Price"] <= spot_price + nearby_range)
+            ]
+
+            try:
+                styled = _style_chain(chain_df[existing_cols])
+                st.dataframe(styled, hide_index=True, use_container_width=True, height=520)
+            except Exception:
+                st.dataframe(chain_df[existing_cols], hide_index=True, use_container_width=True, height=520)
+
+        with adv4:
+            nearby = analyzer.get_nearby_strikes(df, spot_price, nearby_range)
+            st.dataframe(nearby, hide_index=True, use_container_width=True, height=400)
+
+    # ── Footer ────────────────────────────────
     st.divider()
-    st.caption("⚠️ **Disclaimer:** Educational purposes only. Trading involves risk.")
-    
-    # Auto Refresh
+    st.caption("⚠️ **Disclaimer:** For educational purposes only. Trading involves significant risk.")
+
     if auto_refresh:
         time.sleep(refresh_rate)
         st.rerun()
