@@ -923,13 +923,29 @@ def main():
     st.header("🎯 Trading Signals")
     tab_cb, tab_pb, tab_ps, tab_cs = st.tabs(["📈 Call Buy","📉 Put Buy","💰 Put Sell","💰 Call Sell"])
     with tab_cb:
-        [render_trading_signal(s,"call_buy") for s in trading_signals["call_buy"]] or st.warning("No call buy setups")
+        if trading_signals["call_buy"]:
+            for s in trading_signals["call_buy"]:
+                render_trading_signal(s, "call_buy")
+        else:
+            st.warning("No call buy setups at current market conditions.")
     with tab_pb:
-        [render_trading_signal(s,"put_buy")  for s in trading_signals["put_buy"]]  or st.warning("No put buy setups")
+        if trading_signals["put_buy"]:
+            for s in trading_signals["put_buy"]:
+                render_trading_signal(s, "put_buy")
+        else:
+            st.warning("No put buy setups at current market conditions.")
     with tab_ps:
-        [render_trading_signal(s,"put_sell") for s in trading_signals["put_sell"]] or st.info("No put sell setups")
+        if trading_signals["put_sell"]:
+            for s in trading_signals["put_sell"]:
+                render_trading_signal(s, "put_sell")
+        else:
+            st.info("No put sell setups at current market conditions.")
     with tab_cs:
-        [render_trading_signal(s,"call_sell") for s in trading_signals["call_sell"]] or st.info("No call sell setups")
+        if trading_signals["call_sell"]:
+            for s in trading_signals["call_sell"]:
+                render_trading_signal(s, "call_sell")
+        else:
+            st.info("No call sell setups at current market conditions.")
 
     st.divider()
 
