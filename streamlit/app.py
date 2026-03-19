@@ -293,6 +293,282 @@ def compute_totals(df: pd.DataFrame, spot_price: float) -> Dict:
 
 
 # ─────────────────────────────────────────────
+# NEW: Price-Based Directional Bias Engine
+# ─────────────────────────────────────────────
+def compute_price_bias(
+    spot_price: float,
+    totals: Dict,
+    nearest_support: Optional[float],
+    nearest_resistance: Optional[float],
+    max_pain: Optional[float],
+    day_high: Optional[float],
+    day_low: Optional[float],
+    pcr_oi: float,
+) -> Dict:
+    """
+    Score market direction using PRICE-LEVEL evidence only.
+    Each factor votes +1 (bullish) / -1 (bearish) / 0 (neutral).
+    Final score → verdict + recommended side.
+    """
+    factors = []
+
+    # ── 1. Spot vs Support / Resistance proximity ──────────────────────
+    if nearest_support and nearest_resistance:
+        dist_sup = spot_price - nearest_support
+        dist_res = nearest_resistance - spot_price
+        proximity_ratio = dist_sup / (dist_sup + dist_res) if (dist_sup + dist_res) > 0 else 0.5
+        if proximity_ratio < 0.35:          # closer to support → bounce likely
+            vote, reason = +1, f"Spot ₹{spot_price:,.0f} is only {dist_sup:.0f} pts above support {nearest_support:,.0f} → bounce zone"
+        elif proximity_ratio > 0.65:        # closer to resistance → rejection likely
+            vote, reason = -1, f"Spot ₹{spot_price:,.0f} is only {dist_res:.0f} pts below resistance {nearest_resistance:,.0f} → rejection zone"
+        else:
+            vote, reason = 0, f"Spot is mid-range between support ({nearest_support:,.0f}) and resistance ({nearest_resistance:,.0f})"
+        factors.append({"name": "Support/Resistance Proximity", "vote": vote, "reason": reason,
+                         "bull_val": f"{nearest_support:,.0f}", "bear_val": f"{nearest_resistance:,.0f}"})
+    else:
+        factors.append({"name": "Support/Resistance Proximity", "vote": 0,
+                         "reason": "Not enough data", "bull_val": "—", "bear_val": "—"})
+
+    # ── 2. Spot vs Max Pain ───────────────────────────────────────────
+    if max_pain:
+        mp_diff = spot_price - max_pain
+        mp_pct  = mp_diff / max_pain * 100
+        if mp_diff > 0:
+            vote   = -1
+            reason = f"Spot ({spot_price:,.0f}) is {mp_diff:.0f} pts ABOVE max pain ({max_pain:,.0f}) → gravity pull DOWN (sell calls / buy puts)"
+        elif mp_diff < 0:
+            vote   = +1
+            reason = f"Spot ({spot_price:,.0f}) is {abs(mp_diff):.0f} pts BELOW max pain ({max_pain:,.0f}) → gravity pull UP (sell puts / buy calls)"
+        else:
+            vote, reason = 0, f"Spot is AT max pain ({max_pain:,.0f}) → pinning, avoid directional"
+        factors.append({"name": "Max Pain Gravity", "vote": vote, "reason": reason,
+                         "bull_val": f"{max_pain:,.0f} (pull up)" if mp_diff < 0 else "—",
+                         "bear_val": f"{max_pain:,.0f} (pull down)" if mp_diff > 0 else "—"})
+    else:
+        factors.append({"name": "Max Pain Gravity", "vote": 0, "reason": "Max pain not calculated",
+                         "bull_val": "—", "bear_val": "—"})
+
+    # ── 3. Straddle Breakeven Zone ────────────────────────────────────
+    be_up   = totals["breakeven_up"]
+    be_down = totals["breakeven_down"]
+    if be_up and be_down:
+        if spot_price > be_up:
+            vote   = +1
+            reason = f"Spot ({spot_price:,.0f}) has broken ABOVE upper breakeven ({be_up:,.0f}) → trending up strongly"
+        elif spot_price < be_down:
+            vote   = -1
+            reason = f"Spot ({spot_price:,.0f}) has broken BELOW lower breakeven ({be_down:,.0f}) → trending down strongly"
+        else:
+            mid    = (be_up + be_down) / 2
+            vote   = +1 if spot_price > mid else -1
+            side   = "upper half" if spot_price > mid else "lower half"
+            reason = f"Spot is inside straddle zone ({be_down:,.0f}–{be_up:,.0f}), in {side} → mild directional lean"
+        factors.append({"name": "Straddle Breakeven Zone", "vote": vote, "reason": reason,
+                         "bull_val": f">{be_up:,.0f}", "bear_val": f"<{be_down:,.0f}"})
+
+    # ── 4. Day Range Position ─────────────────────────────────────────
+    if day_high and day_low and (day_high - day_low) > 0:
+        day_range  = day_high - day_low
+        pos        = (spot_price - day_low) / day_range   # 0–1
+        if pos >= 0.70:
+            vote   = -1
+            reason = f"Spot is in TOP {pos*100:.0f}% of day range → overextended, mean-reversion risk"
+        elif pos <= 0.30:
+            vote   = +1
+            reason = f"Spot is in BOTTOM {pos*100:.0f}% of day range → oversold intraday, bounce likely"
+        else:
+            vote   = +1 if pos > 0.5 else -1
+            reason = f"Spot at {pos*100:.0f}% of day range → mild {'upper' if pos>0.5 else 'lower'} bias"
+        factors.append({"name": "Day Range Position", "vote": vote, "reason": reason,
+                         "bull_val": f"<30% ({day_low:,.0f}–{day_low+day_range*0.3:,.0f})",
+                         "bear_val": f">70% ({day_low+day_range*0.7:,.0f}–{day_high:,.0f})"})
+
+    # ── 5. Max CE OI (Resistance) vs Max PE OI (Support) distance ────
+    mc_strike = totals.get("max_ce_strike")
+    mp_strike = totals.get("max_pe_strike")
+    if mc_strike and mp_strike:
+        dist_to_res = mc_strike - spot_price
+        dist_to_sup = spot_price - mp_strike
+        if dist_to_sup < dist_to_res * 0.5:
+            vote   = +1
+            reason = f"Max PE OI wall ({mp_strike:,.0f}) very close below → strong floor, lean BULLISH"
+        elif dist_to_res < dist_to_sup * 0.5:
+            vote   = -1
+            reason = f"Max CE OI wall ({mc_strike:,.0f}) very close above → strong ceiling, lean BEARISH"
+        else:
+            vote   = 0
+            reason = f"Max CE OI at {mc_strike:,.0f} (+{dist_to_res:.0f}), Max PE OI at {mp_strike:,.0f} (-{dist_to_sup:.0f}) — balanced"
+        factors.append({"name": "Max OI Wall Distance", "vote": vote, "reason": reason,
+                         "bull_val": f"PE wall {mp_strike:,.0f}", "bear_val": f"CE wall {mc_strike:,.0f}"})
+
+    # ── 6. PCR cross-check ────────────────────────────────────────────
+    if pcr_oi >= 1.2:
+        vote, reason = +1, f"PCR {pcr_oi:.2f} ≥ 1.2 → strong put writing, bullish confirmation"
+    elif pcr_oi <= 0.8:
+        vote, reason = -1, f"PCR {pcr_oi:.2f} ≤ 0.8 → strong call writing, bearish confirmation"
+    else:
+        vote, reason = 0, f"PCR {pcr_oi:.2f} is neutral (0.8–1.2)"
+    factors.append({"name": "PCR Confirmation", "vote": vote, "reason": reason,
+                     "bull_val": "≥1.2", "bear_val": "≤0.8"})
+
+    # ── Score ─────────────────────────────────────────────────────────
+    score      = sum(f["vote"] for f in factors)
+    max_score  = len(factors)
+    bull_count = sum(1 for f in factors if f["vote"] == +1)
+    bear_count = sum(1 for f in factors if f["vote"] == -1)
+    neut_count = sum(1 for f in factors if f["vote"] ==  0)
+
+    pct = score / max_score * 100  # -100 to +100
+
+    if   pct >= 50:  verdict, color, action, emoji = "STRONG BUY CALLS",  "#00cc44", "BUY CALLS / SELL PUTS",  "🚀"
+    elif pct >= 20:  verdict, color, action, emoji = "MILD BUY CALLS",    "#66dd88", "Consider CALL buying",    "📈"
+    elif pct <= -50: verdict, color, action, emoji = "STRONG BUY PUTS",   "#cc2200", "BUY PUTS / SELL CALLS",   "🔻"
+    elif pct <= -20: verdict, color, action, emoji = "MILD BUY PUTS",     "#dd6666", "Consider PUT buying",     "📉"
+    else:            verdict, color, action, emoji = "RANGE / NEUTRAL",   "#aaaaaa", "Straddle / Iron Condor",  "⚖️"
+
+    return {
+        "factors":    factors,
+        "score":      score,
+        "max_score":  max_score,
+        "pct":        pct,
+        "verdict":    verdict,
+        "color":      color,
+        "action":     action,
+        "emoji":      emoji,
+        "bull_count": bull_count,
+        "bear_count": bear_count,
+        "neut_count": neut_count,
+    }
+
+
+def render_price_direction_panel(bias: Dict, spot_price: float, totals: Dict,
+                                  nearest_support: Optional[float],
+                                  nearest_resistance: Optional[float]):
+    """Render the Price-Based Direction Panel"""
+
+    pct   = bias["pct"]
+    # Gauge fill: map -100..+100 → 0..100% width, with center at 50%
+    gauge_fill = 50 + pct / 2          # 0% = full bear, 50% = neutral, 100% = full bull
+    gauge_fill = max(2, min(98, gauge_fill))
+
+    # Color gradient: red (bear) → grey (neutral) → green (bull)
+    bar_color = bias["color"]
+
+    vote_icons = {+1: "🟢", -1: "🔴", 0: "⚪"}
+
+    # Factor rows HTML
+    rows_html = ""
+    for f in bias["factors"]:
+        icon  = vote_icons[f["vote"]]
+        label = "BULLISH" if f["vote"] == +1 else ("BEARISH" if f["vote"] == -1 else "NEUTRAL")
+        lc    = "#66dd88" if f["vote"] == +1 else ("#dd6666" if f["vote"] == -1 else "#aaaaaa")
+        rows_html += f"""
+        <tr>
+          <td style='padding:7px 10px;font-weight:600;color:#ddd'>{f['name']}</td>
+          <td style='padding:7px 10px;text-align:center'>{icon}
+              <span style='font-size:11px;color:{lc};font-weight:700'> {label}</span></td>
+          <td style='padding:7px 10px;font-size:12px;color:#ccc'>{f['reason']}</td>
+        </tr>"""
+
+    st.markdown(f"""
+    <div style='background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);
+                border:2px solid {bar_color};border-radius:14px;padding:24px;margin:20px 0'>
+
+      <div style='text-align:center;margin-bottom:20px'>
+        <div style='font-size:13px;opacity:.7;letter-spacing:2px;text-transform:uppercase'>
+          Price-Based Directional Verdict
+        </div>
+        <div style='font-size:36px;font-weight:900;color:{bar_color};margin:8px 0'>
+          {bias['emoji']} {bias['verdict']}
+        </div>
+        <div style='font-size:16px;color:#FFD700;font-weight:600'>{bias['action']}</div>
+      </div>
+
+      <!-- Score Gauge -->
+      <div style='margin:18px 0'>
+        <div style='display:flex;justify-content:space-between;font-size:12px;opacity:.7;margin-bottom:4px'>
+          <span>🔴 STRONG BEAR</span><span>⚪ NEUTRAL</span><span>🟢 STRONG BULL</span>
+        </div>
+        <div style='background:#333;border-radius:20px;height:28px;position:relative;overflow:hidden'>
+          <!-- neutral centre line -->
+          <div style='position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(255,255,255,.3)'></div>
+          <!-- fill bar, always from centre outward -->
+          {"<div style='position:absolute;left:50%;top:0;width:" + str(abs(gauge_fill-50)) + "%;height:100%;background:" + bar_color + ";opacity:.85;" + ("" if pct>=0 else "right:50%;left:auto;") + "'></div>"
+           if pct >= 0 else
+           "<div style='position:absolute;right:50%;top:0;width:" + str(abs(gauge_fill-50)) + "%;height:100%;background:" + bar_color + ";opacity:.85;'></div>"
+          }
+          <div style='position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+                      font-size:13px;font-weight:700;color:white;text-shadow:0 0 6px #000'>
+            Score: {bias['score']:+d} / {bias['max_score']} &nbsp;|&nbsp;
+            🟢 {bias['bull_count']} &nbsp; 🔴 {bias['bear_count']} &nbsp; ⚪ {bias['neut_count']}
+          </div>
+        </div>
+      </div>
+
+      <!-- Factor Table -->
+      <table style='width:100%;border-collapse:collapse;margin-top:16px'>
+        <thead>
+          <tr style='border-bottom:1px solid #444'>
+            <th style='padding:7px 10px;text-align:left;color:#aaa;font-size:12px'>FACTOR</th>
+            <th style='padding:7px 10px;text-align:center;color:#aaa;font-size:12px'>VOTE</th>
+            <th style='padding:7px 10px;text-align:left;color:#aaa;font-size:12px'>PRICE EVIDENCE</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Recommended Strikes box ──
+    atm    = totals["atm_strike"]
+    st_px  = totals["straddle_price"]
+    be_up  = totals["breakeven_up"]
+    be_dn  = totals["breakeven_down"]
+
+    if bias["pct"] >= 20:           # bullish
+        rec_buy  = f"BUY CALL @ {atm:,.0f} (ATM)"
+        rec_sell = f"SELL PUT @ {nearest_support:,.0f} (support)" if nearest_support else "SELL OTM PUT"
+        tgt      = fmt(nearest_resistance) if nearest_resistance else "next resistance"
+        sl       = fmt(nearest_support - 100) if nearest_support else "below support"
+        box_color = "#0f4f2f"
+        border    = "#00cc44"
+    elif bias["pct"] <= -20:        # bearish
+        rec_buy  = f"BUY PUT @ {atm:,.0f} (ATM)"
+        rec_sell = f"SELL CALL @ {nearest_resistance:,.0f} (resistance)" if nearest_resistance else "SELL OTM CALL"
+        tgt      = fmt(nearest_support) if nearest_support else "next support"
+        sl       = fmt(nearest_resistance + 100) if nearest_resistance else "above resistance"
+        box_color = "#4f0f0f"
+        border    = "#cc2200"
+    else:                            # neutral
+        rec_buy  = f"BUY STRADDLE @ {atm:,.0f}"
+        rec_sell = f"SELL STRANGLE: CE {nearest_resistance:,.0f} / PE {nearest_support:,.0f}" \
+                   if nearest_resistance and nearest_support else "IRON CONDOR"
+        tgt      = f"Collect premium within {fmt(be_dn)} – {fmt(be_up)}"
+        sl       = "Exit if spot breaks outside straddle zone"
+        box_color = "#2a2a2a"
+        border    = "#888888"
+
+    st.markdown(f"""
+    <div style='background:{box_color};border-left:5px solid {border};
+                border-radius:10px;padding:18px;margin:10px 0'>
+      <div style='font-size:15px;font-weight:700;color:{border};margin-bottom:10px'>
+        🎯 Recommended Trade Setup (Price-Based)
+      </div>
+      <div style='display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;font-size:13px'>
+        <div><div style='opacity:.7;font-size:11px'>PRIMARY</div><div style='font-weight:700;color:#FFD700'>{rec_buy}</div></div>
+        <div><div style='opacity:.7;font-size:11px'>HEDGE / PREMIUM</div><div style='font-weight:700;color:#ccc'>{rec_sell}</div></div>
+        <div><div style='opacity:.7;font-size:11px'>TARGET</div><div style='font-weight:700;color:#66ff99'>{tgt}</div></div>
+        <div><div style='opacity:.7;font-size:11px'>STOP LOSS (SPOT)</div><div style='font-weight:700;color:#ff6666'>{sl}</div></div>
+      </div>
+      <div style='margin-top:12px;font-size:11px;opacity:.6'>
+        ATM: {fmt(atm)} · Straddle: {fmt(st_px)} · Breakevens: {fmt(be_dn)} ↔ {fmt(be_up)}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
 # NEW: Full Chain Enrichment (decision signals)
 # ─────────────────────────────────────────────
 def enrich_chain(df: pd.DataFrame, spot_price: float) -> pd.DataFrame:
@@ -884,6 +1160,11 @@ def main():
         analyzer.find_support_resistance(df, spot_price, num_levels)
     trading_signals = analyzer.generate_trading_signals(
         df, spot_price, pcr_data, nearest_support, nearest_resistance)
+    max_pain, pain_df = analyzer.analyze_max_pain(df)
+    price_bias = compute_price_bias(
+        spot_price, totals, nearest_support, nearest_resistance,
+        max_pain, day_high, day_low, totals["pcr_oi"]
+    )
 
     st.success(f"✅ {expiry} · {len(df)} active strikes loaded")
 
@@ -908,6 +1189,14 @@ def main():
         <h3 style='color:{pcr_data['color']};margin:0'>{pcr_data['sentiment']}</h3>
         <p style='margin:5px 0 0 0'>{pcr_data['description']}</p>
     </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── Price-Based Direction Panel ───────────
+    st.header("🧭 Price-Based Directional Analysis")
+    render_price_direction_panel(
+        price_bias, spot_price, totals, nearest_support, nearest_resistance
+    )
 
     st.divider()
 
@@ -991,7 +1280,6 @@ def main():
         adv1, adv2, adv3, adv4 = st.tabs(["Max Pain","IV Smile","Full Chain (Enriched)","Nearby Strikes"])
 
         with adv1:
-            max_pain, pain_df = analyzer.analyze_max_pain(df)
             if max_pain:
                 mc1, mc2 = st.columns([1,2])
                 with mc1:
