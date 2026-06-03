@@ -13,7 +13,7 @@ import logging
 # Configuration
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="📊 BSE Option Chain Pro",
+    page_title="📊 Market Journal – BSE Option Chain Pro",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -1091,8 +1091,8 @@ def _style_chain(df: pd.DataFrame) -> pd.DataFrame.style:
 # Main
 # ─────────────────────────────────────────────
 def main():
-    st.title("📈 BSE Option Chain Pro Dashboard")
-    st.markdown("**Real-time OI · Volume · Premium · Decision Analytics**")
+    st.title("📊 Market Journal – BSE Option Chain Pro")
+    st.markdown("**Real-time OI · Volume · Premium · Decision Analytics · Price-Based Signals**")
 
     analyzer  = OptionAnalyzer()
     chart_gen = ChartGenerator()
