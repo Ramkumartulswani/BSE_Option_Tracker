@@ -1,0 +1,68 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+    id "com.facebook.react"
+}
+
+android {
+    namespace "com.fungen.app"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.fungen.app"
+        minSdk 23
+        targetSdk 34
+        versionCode 7
+        versionName "1.0.8"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+    jvmTarget = "17"
+    freeCompilerArgs += [
+        "-Xjvm-default=all",
+        "-opt-in=kotlin.RequiresOptIn"
+    ]
+    }
+
+    signingConfigs {
+        release {
+            if (project.hasProperty('FUNGEN_UPLOAD_STORE_FILE')) {
+                storeFile file(FUNGEN_UPLOAD_STORE_FILE)
+                storePassword FUNGEN_UPLOAD_STORE_PASSWORD
+                keyAlias FUNGEN_UPLOAD_KEY_ALIAS
+                keyPassword FUNGEN_UPLOAD_KEY_PASSWORD
+            }
+        }
+    }
+
+
+    buildTypes {
+        debug {}
+        release {
+            signingConfig signingConfigs.release   // ✅ THIS LINE IS CRITICAL
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    // Firebase disabled
+    // implementation platform("com.google.firebase:firebase-bom:32.7.0")
+    // implementation "com.google.firebase:firebase-config"
+
+    implementation("com.facebook.react:react-android")
+    implementation("com.facebook.react:hermes-android")
+    debugImplementation("com.facebook.flipper:flipper:0.211.0")
+    debugImplementation("com.facebook.flipper:flipper-network-plugin:0.211.0")
+    debugImplementation("com.facebook.flipper:flipper-fresco-plugin:0.211.0")
+}
+
+apply from: file("../../node_modules/@react-native-community/cli-platform-android/native_modules.gradle")
+applyNativeModulesAppBuildGradle(project)
+apply plugin: "com.google.gms.google-services"
+

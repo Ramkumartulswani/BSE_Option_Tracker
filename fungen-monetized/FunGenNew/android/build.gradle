@@ -1,0 +1,38 @@
+buildscript {
+    ext {
+        buildToolsVersion = "34.0.0"
+        minSdkVersion = 23
+        compileSdkVersion = 34
+        targetSdkVersion = 34
+        kotlinVersion = "1.9.22"
+        googleMobileAdsJson = "\"{\\\"admob\\\":{\\\"application_id\\\":\\\"ca-app-pub-5140463358652561~3341696785\\\"}}\""
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.1.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
+        classpath("com.google.gms:google-services:4.4.0")
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url("$rootDir/../node_modules/react-native/android") }
+    }
+}
+
+subprojects { subproject ->
+    subproject.plugins.withId("com.android.library") {
+        subproject.extensions.configure(com.android.build.gradle.LibraryExtension) { ext ->
+            ext.buildFeatures {
+                buildConfig true
+            }
+        }
+    }
+}
+

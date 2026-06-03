@@ -1,0 +1,126 @@
+name: Android Build (APK + AAB)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'main'
+
+jobs:
+  android-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      # -------------------------
+      # Checkout code
+      # -------------------------
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+
+
+      # -------------------------
+      # Node.js
+      # -------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install JS dependencies
+        working-directory: FunGenNew
+        run: npm install --legacy-peer-deps
+
+      # -------------------------
+      # Java 17
+      # -------------------------
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      # -------------------------
+      # Android SDK
+      # -------------------------
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+          yes | sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmdline-tools;latest"
+
+      # -------------------------
+      # Restore Release Keystore (FROM SECRET)
+      # -------------------------
+      - name: Restore release keystore
+        run: |
+          echo "${{ secrets.FUNGEN_KEYSTORE_BASE64 }}" | base64 --decode > FunGenNew/android/app/fungen-release.keystore
+
+      - name: Print SHA-1 of release keystore
+        run: |
+            keytool -list -v \
+              -keystore FunGenNew/android/app/fungen-release.keystore \
+              -storepass "${{ secrets.FUNGEN_STORE_PASSWORD }}" \
+              -alias "${{ secrets.FUNGEN_KEY_ALIAS }}"
+
+
+      - name: Prepare Gradle signing config
+        run: |
+          cat >> FunGenNew/android/gradle.properties <<EOF
+      
+          # --- Signing config injected by CI ---
+          FUNGEN_UPLOAD_STORE_FILE=fungen-release.keystore
+          FUNGEN_UPLOAD_STORE_PASSWORD=${{ secrets.FUNGEN_STORE_PASSWORD }}
+          FUNGEN_UPLOAD_KEY_ALIAS=${{ secrets.FUNGEN_KEY_ALIAS }}
+          FUNGEN_UPLOAD_KEY_PASSWORD=${{ secrets.FUNGEN_KEY_PASSWORD }}
+          EOF
+
+
+
+      # -------------------------
+      # Build APK + AAB (SIGNED)
+      # -------------------------
+      - name: Build Release APK and AAB
+        working-directory: FunGenNew/android
+        env:
+          FUNGEN_UPLOAD_STORE_FILE: fungen-release.keystore
+          FUNGEN_UPLOAD_STORE_PASSWORD: ${{ secrets.FUNGEN_STORE_PASSWORD }}
+          FUNGEN_UPLOAD_KEY_ALIAS: ${{ secrets.FUNGEN_KEY_ALIAS }}
+          FUNGEN_UPLOAD_KEY_PASSWORD: ${{ secrets.FUNGEN_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew clean
+          ./gradlew assembleRelease
+          ./gradlew bundleRelease
+
+      # -------------------------
+      # Upload artifacts
+      # -------------------------
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FunGenNew-APK
+          path: FunGenNew/android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: FunGenNew-AAB
+          path: FunGenNew/android/app/build/outputs/bundle/release/*.aab
+          retention-days: 30

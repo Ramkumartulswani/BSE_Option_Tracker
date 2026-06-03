@@ -1,0 +1,32 @@
+{
+  "project_info": {
+    "project_number": "291245199156",
+    "project_id": "fungen-7b279",
+    "storage_bucket": "fungen-7b279.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:291245199156:android:13496b494314d1de0adf61",
+        "android_client_info": {
+          "package_name": "com.fungen.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBtitv4074aP33FGSl0BZ68tLRQ-9FdFac"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        },
+        "admob_service": {
+          "admob_application_id": "ca-app-pub-5140463358652561~3341696785"
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
